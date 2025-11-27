@@ -95,6 +95,128 @@ class SurgeDatabase:
             )
         ''')
 
+        # 기술적 지표 테이블
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS technical_indicators (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL,
+                timestamp TIMESTAMP NOT NULL,
+                rsi_14 REAL,
+                rsi_7 REAL,
+                macd REAL,
+                macd_signal REAL,
+                macd_histogram REAL,
+                bb_upper REAL,
+                bb_middle REAL,
+                bb_lower REAL,
+                bb_width REAL,
+                ema_9 REAL,
+                ema_21 REAL,
+                ema_50 REAL,
+                atr_14 REAL,
+                stoch_k REAL,
+                stoch_d REAL,
+                obv REAL,
+                vwap REAL,
+                mfi_14 REAL,
+                adx_14 REAL,
+                volume_ratio REAL,
+                price_position REAL,
+                UNIQUE(symbol, timestamp)
+            )
+        ''')
+
+        # 소셜 데이터 테이블
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS social_data (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL,
+                timestamp TIMESTAMP NOT NULL,
+                social_volume INTEGER,
+                social_volume_change_24h REAL,
+                social_score REAL,
+                sentiment REAL,
+                tweets_24h INTEGER,
+                social_dominance REAL,
+                reddit_subscribers INTEGER,
+                reddit_avg_posts_48h REAL,
+                UNIQUE(symbol, timestamp)
+            )
+        ''')
+
+        # ML 모델 메타데이터 테이블
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS ml_models (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                model_name TEXT NOT NULL,
+                model_version TEXT NOT NULL,
+                model_type TEXT,
+                training_samples INTEGER,
+                test_accuracy REAL,
+                test_precision REAL,
+                test_recall REAL,
+                test_f1_score REAL,
+                feature_count INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(model_name, model_version)
+            )
+        ''')
+
+        # 예측 결과 테이블
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS predictions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL,
+                prediction_timestamp TIMESTAMP NOT NULL,
+                predicted_surge_probability REAL,
+                pattern_score REAL,
+                model_version TEXT,
+                actual_surge BOOLEAN,
+                surge_happened_at TIMESTAMP,
+                actual_surge_change REAL,
+                prediction_correct BOOLEAN,
+                UNIQUE(symbol, prediction_timestamp)
+            )
+        ''')
+
+        # 백테스트 결과 테이블
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS backtest_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                backtest_name TEXT NOT NULL,
+                model_version TEXT,
+                start_date TIMESTAMP,
+                end_date TIMESTAMP,
+                initial_balance REAL,
+                final_balance REAL,
+                total_return REAL,
+                total_trades INTEGER,
+                winning_trades INTEGER,
+                losing_trades INTEGER,
+                win_rate REAL,
+                max_drawdown REAL,
+                sharpe_ratio REAL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # 성능 추적 테이블
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS performance_tracking (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tracking_date DATE NOT NULL,
+                total_predictions INTEGER,
+                correct_predictions INTEGER,
+                false_positives INTEGER,
+                false_negatives INTEGER,
+                accuracy REAL,
+                precision REAL,
+                recall REAL,
+                f1_score REAL,
+                UNIQUE(tracking_date)
+            )
+        ''')
+
         self.conn.commit()
 
     def save_surge_event(self, event: Dict) -> int:
