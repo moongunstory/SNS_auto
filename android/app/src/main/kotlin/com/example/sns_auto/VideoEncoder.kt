@@ -567,7 +567,7 @@ class VideoEncoder(private val context: Context) {
      *
      * @param bitmaps List of prepared image bitmaps
      * @param frameIndex Current frame number (0-based)
-     * @param framesPerImage How many frames each image is shown (e.g., 45 for 1.5s at 30fps)
+     * @param framesPerImage How many frames each image is shown (e.g., 45 for 2.5s at 30fps)
      * @param crossfadeFrames How many frames the crossfade lasts (e.g., 15 for 0.5s at 30fps)
      *
      * Timeline example with 3 images (framesPerImage=45, crossfadeFrames=15):
@@ -577,7 +577,7 @@ class VideoEncoder(private val context: Context) {
      * - Frames 75-89:  Image 1 → Image 2 crossfade
      * - Frames 90-119: Image 2 only
      *
-     * Each image displays for 45 frames (1.5s), with 15-frame (0.5s) overlap
+     * Each image displays for 45 frames (2.5s), with 15-frame (0.5s) overlap
      */
     private fun generateFrame(
         bitmaps: List<Bitmap>,

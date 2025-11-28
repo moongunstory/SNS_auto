@@ -23,7 +23,7 @@ class TemplateModel {
         description: '부드러운 크로스페이드 전환 효과',
         config: TemplateConfig(
           transitionType: TransitionType.fade,
-          imageDurationSeconds: 1.5,
+          imageDurationSeconds: 2.5,
           transitionDurationSeconds: 0.5,
           musicTrackName: 'bgm_default.mp3',
         ),

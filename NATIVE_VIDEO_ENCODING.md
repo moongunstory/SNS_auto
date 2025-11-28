@@ -50,7 +50,7 @@ The app now uses **Android's native MediaCodec and MediaMuxer APIs** to render s
 ### Timing
 
 Based on template configuration (default values):
-- Each image displays for **1.5 seconds** (45 frames at 30 FPS)
+- Each image displays for **2.5 seconds** (45 frames at 30 FPS)
 - Crossfade transition lasts **0.5 seconds** (15 frames)
 - Images overlap during transition
 
@@ -77,16 +77,16 @@ The crossfade is implemented by alpha-blending two consecutive images:
 ```
 Frame timeline for 3 images:
 ┌─────────────────────────────────────────────────┐
-│ Image 1: frames 0-44 (1.5s)                     │
+│ Image 1: frames 0-44 (2.5s)                     │
 │   ├─ Fully visible: 0-29 (1.0s)                 │
 │   └─ Crossfade: 30-44 (0.5s) ───┐               │
 │                                  ↓               │
-│ Image 2: frames 30-74 (1.5s)                    │
+│ Image 2: frames 30-74 (2.5s)                    │
 │   ├─ Crossfade: 30-44 (0.5s)                    │
 │   ├─ Fully visible: 45-59 (1.0s)                │
 │   └─ Crossfade: 60-74 (0.5s) ───┐               │
 │                                  ↓               │
-│ Image 3: frames 60-104 (1.5s)                   │
+│ Image 3: frames 60-104 (2.5s)                   │
 │   ├─ Crossfade: 60-74 (0.5s)                    │
 │   └─ Fully visible: 75-104 (1.0s)               │
 └─────────────────────────────────────────────────┘
