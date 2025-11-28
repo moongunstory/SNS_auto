@@ -551,9 +551,9 @@ class VideoEncoder(private val context: Context) {
      * Timeline example with 3 images (framesPerImage=45, crossfadeFrames=15):
      * - Frames 0-29:   Image 0 only
      * - Frames 30-44:  Image 0 → Image 1 crossfade
-     * - Frames 45-59:  Image 1 only
-     * - Frames 60-74:  Image 1 → Image 2 crossfade
-     * - Frames 75-89:  Image 2 only
+     * - Frames 45-74:  Image 1 only
+     * - Frames 75-89:  Image 1 → Image 2 crossfade
+     * - Frames 90-119: Image 2 only
      *
      * Each image displays for 45 frames (1.5s), with 15-frame (0.5s) overlap
      */
@@ -566,7 +566,7 @@ class VideoEncoder(private val context: Context) {
         // Calculate the offset between image start times (accounting for overlap)
         val frameOffset = framesPerImage - crossfadeFrames
 
-        // Find which image we're primarily showing
+        // Find which image started most recently (but not after this frame)
         var currentImageIndex = frameIndex / frameOffset
 
         // Handle last image edge case
@@ -579,21 +579,36 @@ class VideoEncoder(private val context: Context) {
 
         // Determine if we're in a crossfade period
         val crossfadeStart = framesPerImage - crossfadeFrames
-        val isInCrossfade = frameInCurrentImage >= crossfadeStart &&
-                           currentImageIndex < bitmaps.size - 1
 
-        return if (isInCrossfade) {
-            // Crossfade between current and next image
-            val nextImageIndex = currentImageIndex + 1
-            val crossfadeFrameIndex = frameInCurrentImage - crossfadeStart
-            val crossfadeProgress = crossfadeFrameIndex.toFloat() / crossfadeFrames
+        // Check if we're in crossfade with the PREVIOUS image
+        val isInCrossfadeWithPrevious = frameInCurrentImage < crossfadeFrames &&
+                                        currentImageIndex > 0
 
-            Log.v(TAG, "Frame $frameIndex: Crossfade ${currentImageIndex}→${nextImageIndex} (${(crossfadeProgress * 100).toInt()}%)")
-            crossfadeBitmaps(bitmaps[currentImageIndex], bitmaps[nextImageIndex], crossfadeProgress)
-        } else {
-            // Show single image
-            Log.v(TAG, "Frame $frameIndex: Image $currentImageIndex")
-            bitmaps[currentImageIndex].copy(Bitmap.Config.ARGB_8888, false)
+        // Check if we're in crossfade with the NEXT image
+        val isInCrossfadeWithNext = frameInCurrentImage >= crossfadeStart &&
+                                   currentImageIndex < bitmaps.size - 1
+
+        return when {
+            isInCrossfadeWithPrevious -> {
+                // Crossfade from previous to current image
+                val prevImageIndex = currentImageIndex - 1
+                val crossfadeProgress = frameInCurrentImage.toFloat() / crossfadeFrames
+                Log.v(TAG, "Frame $frameIndex: Crossfade ${prevImageIndex}→${currentImageIndex} (${(crossfadeProgress * 100).toInt()}%)")
+                crossfadeBitmaps(bitmaps[prevImageIndex], bitmaps[currentImageIndex], crossfadeProgress)
+            }
+            isInCrossfadeWithNext -> {
+                // Crossfade from current to next image
+                val nextImageIndex = currentImageIndex + 1
+                val crossfadeFrameIndex = frameInCurrentImage - crossfadeStart
+                val crossfadeProgress = crossfadeFrameIndex.toFloat() / crossfadeFrames
+                Log.v(TAG, "Frame $frameIndex: Crossfade ${currentImageIndex}→${nextImageIndex} (${(crossfadeProgress * 100).toInt()}%)")
+                crossfadeBitmaps(bitmaps[currentImageIndex], bitmaps[nextImageIndex], crossfadeProgress)
+            }
+            else -> {
+                // Show single image
+                Log.v(TAG, "Frame $frameIndex: Image $currentImageIndex")
+                bitmaps[currentImageIndex].copy(Bitmap.Config.ARGB_8888, false)
+            }
         }
     }
 
@@ -684,6 +699,10 @@ class VideoEncoder(private val context: Context) {
                     val outputBufferId = decoder.dequeueOutputBuffer(bufferInfo, CODEC_TIMEOUT_US)
                     if (outputBufferId >= 0) {
                         val outputBuffer = decoder.getOutputBuffer(outputBufferId)!!
+
+                        // Set position and limit based on bufferInfo
+                        outputBuffer.position(bufferInfo.offset)
+                        outputBuffer.limit(bufferInfo.offset + bufferInfo.size)
 
                         // Convert ByteBuffer to ShortArray (16-bit PCM samples)
                         val shortBuffer = outputBuffer.asShortBuffer()
