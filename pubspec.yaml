@@ -16,9 +16,6 @@ dependencies:
   # Image/file picker for photo selection from gallery
   image_picker: ^1.0.7
 
-  # FFmpeg for video rendering and processing
-  flutter_ffmpeg_lts_custom: ^0.4.0
-
   # Video player for previewing generated videos
   video_player: ^2.8.2
 
