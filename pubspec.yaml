@@ -31,10 +31,29 @@ dependencies:
   flutter:
     sdk: flutter
 
-
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.6
+
+  # Image/file picker for photo selection from gallery
+  image_picker: ^1.0.7
+
+  # FFmpeg for video rendering and processing
+  # NOTE: Requires Android minSdkVersion 24 or higher
+  ffmpeg_kit_flutter: ^6.0.3
+
+  # Video player for previewing generated videos
+  video_player: ^2.8.2
+
+  # Secure storage for sensitive tokens (Instagram, etc.)
+  flutter_secure_storage: ^9.0.0
+
+  # HTTP client for SNS API calls
+  http: ^1.2.0
+
+  # Path utilities for file handling
+  path: ^1.8.3
+  path_provider: ^2.1.2
 
 dev_dependencies:
   flutter_test:
