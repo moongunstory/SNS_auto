@@ -12,62 +12,20 @@ class TemplateModel {
     required this.config,
   });
 
-  /// Mock templates for development
+  /// Get available templates
+  /// Currently only one template is available, but the structure
+  /// is designed to be easily extended in the future
   static List<TemplateModel> getMockTemplates() {
     return [
       TemplateModel(
-        id: 'template_1',
-        name: 'Classic Slideshow',
-        description: 'Simple fade transitions with ambient music',
+        id: 'classic_slideshow',
+        name: '기본 슬라이드쇼 (클래식)',
+        description: '부드러운 크로스페이드 전환 효과',
         config: TemplateConfig(
           transitionType: TransitionType.fade,
-          imageDurationSeconds: 3.0,
-          transitionDurationSeconds: 0.5,
-          musicTrackName: 'ambient_music.mp3',
-        ),
-      ),
-      TemplateModel(
-        id: 'template_2',
-        name: 'Dynamic Zoom',
-        description: 'Ken Burns effect with upbeat music',
-        config: TemplateConfig(
-          transitionType: TransitionType.zoom,
-          imageDurationSeconds: 2.5,
-          transitionDurationSeconds: 0.8,
-          musicTrackName: 'upbeat_music.mp3',
-        ),
-      ),
-      TemplateModel(
-        id: 'template_3',
-        name: 'Quick Cuts',
-        description: 'Fast paced with no transitions',
-        config: TemplateConfig(
-          transitionType: TransitionType.cut,
           imageDurationSeconds: 1.5,
-          transitionDurationSeconds: 0.0,
-          musicTrackName: 'energetic_music.mp3',
-        ),
-      ),
-      TemplateModel(
-        id: 'template_4',
-        name: 'Smooth Slide',
-        description: 'Smooth sliding transitions with calm music',
-        config: TemplateConfig(
-          transitionType: TransitionType.slide,
-          imageDurationSeconds: 3.5,
-          transitionDurationSeconds: 0.6,
-          musicTrackName: 'calm_music.mp3',
-        ),
-      ),
-      TemplateModel(
-        id: 'template_5',
-        name: 'Dissolve Effect',
-        description: 'Cross-dissolve with dramatic music',
-        config: TemplateConfig(
-          transitionType: TransitionType.dissolve,
-          imageDurationSeconds: 4.0,
-          transitionDurationSeconds: 1.0,
-          musicTrackName: 'dramatic_music.mp3',
+          transitionDurationSeconds: 0.5,
+          musicTrackName: 'bgm_default.mp3',
         ),
       ),
     ];

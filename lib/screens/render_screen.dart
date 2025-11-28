@@ -53,7 +53,7 @@ class _RenderScreenState extends State<RenderScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Rendering Video'),
+        title: const Text(AppConstants.titleRendering),
         backgroundColor: Theme.of(context).colorScheme.primaryContainer,
       ),
       body: SafeArea(
@@ -122,7 +122,7 @@ class _RenderScreenState extends State<RenderScreen> {
             const SizedBox(height: AppConstants.paddingSmall),
 
             Text(
-              'Using ${widget.renderJob.template.name} template',
+              '${widget.renderJob.template.name} ${AppConstants.hintUsingTemplate}',
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                     color: Theme.of(context).colorScheme.onSurface.withOpacity(0.7),
                   ),
@@ -213,7 +213,7 @@ class _RenderScreenState extends State<RenderScreen> {
           const SizedBox(height: AppConstants.paddingMedium),
 
           Text(
-            'Tap video to play/pause',
+            AppConstants.hintTapToPlayPause,
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
                 ),

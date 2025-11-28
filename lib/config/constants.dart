@@ -107,26 +107,72 @@ class AppConstants {
   static const String videoFilePrefix = 'video_';
 
   // ============================================================================
-  // Messages & Labels
+  // Messages & Labels (Korean)
   // ============================================================================
 
   static const String appName = 'SNS Auto';
 
-  static const String errorNoPhotosSelected = 'Please select at least one photo';
-  static const String errorNoTemplateSelected = 'Please select a template';
-  static const String errorRenderingFailed = 'Video rendering failed';
-  static const String errorUploadFailed = 'Upload failed';
-  static const String errorNoPlatformSelected = 'Please select at least one platform';
+  // Error messages
+  static const String errorNoPhotosSelected = '사진을 한 장 이상 선택해주세요';
+  static const String errorNoTemplateSelected = '템플릿을 선택해주세요';
+  static const String errorRenderingFailed = '영상 렌더링에 실패했습니다';
+  static const String errorUploadFailed = '업로드에 실패했습니다';
+  static const String errorNoPlatformSelected = '업로드할 플랫폼을 한 곳 이상 선택해주세요';
+  static const String errorPickingImages = '사진 선택 중 오류가 발생했습니다';
 
-  static const String labelSelectPhotos = 'Select Photos';
-  static const String labelGenerateVideo = 'Generate Video';
-  static const String labelNext = 'Next';
-  static const String labelUpload = 'Upload';
-  static const String labelRetry = 'Retry';
-  static const String labelBack = 'Back';
+  // Button labels
+  static const String labelSelectPhotos = '사진 선택';
+  static const String labelGenerateVideo = '영상 생성';
+  static const String labelNext = '다음';
+  static const String labelUpload = '업로드';
+  static const String labelRetry = '다시 시도';
+  static const String labelBack = '뒤로';
 
-  static const String messageRenderingInProgress = 'Rendering video...';
-  static const String messageRenderingComplete = 'Video ready!';
-  static const String messageUploadInProgress = 'Uploading...';
-  static const String messageUploadComplete = 'Upload complete!';
+  // Status messages
+  static const String messageRenderingInProgress = '영상을 렌더링하는 중...';
+  static const String messageRenderingComplete = '영상이 완성되었습니다!';
+  static const String messageUploadInProgress = '업로드 중...';
+  static const String messageUploadComplete = '업로드 완료!';
+  static const String messageNoBgm = '배경음악 파일이 없어 무음으로 렌더링했습니다';
+
+  // Screen titles
+  static const String titleHome = '홈';
+  static const String titleRendering = '영상 렌더링';
+  static const String titleUpload = 'SNS 업로드';
+
+  // Section titles
+  static const String sectionSelectPhotos = '사진 선택';
+  static const String sectionChooseTemplate = '템플릿 선택';
+  static const String sectionVideoPreview = '영상 미리보기';
+  static const String sectionUploadTo = '업로드할 플랫폼';
+  static const String sectionCaption = '캡션';
+  static const String sectionPlatformTags = '플랫폼별 태그';
+  static const String sectionUploadStatus = '업로드 상태';
+
+  // Hints and descriptions
+  static const String hintNoPhotos = '선택된 사진 없음';
+  static const String hintPhotoCount = '장의 사진 선택됨';
+  static const String hintCaptionInput = '캡션을 입력하세요...';
+  static const String hintTapToPlayPause = '탭하여 재생/일시정지';
+  static const String hintUsingTemplate = '템플릿 사용 중';
+
+  // Platform names
+  static const String platformFacebookPage = 'Facebook 페이지';
+  static const String platformInstagramReels = 'Instagram 릴스';
+  static const String platformYouTubeShorts = 'YouTube Shorts';
+  static const String platformTikTok = 'TikTok';
+
+  // Tag input labels
+  static const String labelInstagramHashtags = 'Instagram 해시태그';
+  static const String labelYouTubeTags = 'YouTube 태그';
+  static const String labelTikTokHashtags = 'TikTok 해시태그';
+
+  // Tag input hints
+  static const String hintInstagramTags = '#태그1 #태그2 #태그3';
+  static const String hintYouTubeTags = '태그1, 태그2, 태그3';
+  static const String hintTikTokTags = '#태그1 #태그2 #태그3';
+
+  // BGM related
+  static const String bgmFilePath = '/Android/data/com.example.sns_auto/files/bgm/bgm_default.mp3';
+  static const String bgmHelpMessage = 'mp3 파일을 위 경로에 bgm_default.mp3 이름으로 저장하면 배경음악이 적용됩니다';
 }

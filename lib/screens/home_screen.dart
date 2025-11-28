@@ -71,7 +71,7 @@ class _HomeScreenState extends State<HomeScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          'Select Photos',
+          AppConstants.sectionSelectPhotos,
           style: Theme.of(context).textTheme.titleLarge?.copyWith(
                 fontWeight: FontWeight.bold,
               ),
@@ -91,7 +91,7 @@ class _HomeScreenState extends State<HomeScreen> {
         // Selected photos display
         if (_selectedImagePaths.isEmpty)
           Text(
-            'No photos selected',
+            AppConstants.hintNoPhotos,
             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                   color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
                 ),
@@ -101,7 +101,7 @@ class _HomeScreenState extends State<HomeScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                '${_selectedImagePaths.length} photo(s) selected',
+                '${_selectedImagePaths.length}${AppConstants.hintPhotoCount}',
                 style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                       fontWeight: FontWeight.w600,
                     ),
@@ -142,7 +142,7 @@ class _HomeScreenState extends State<HomeScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          'Choose Template',
+          AppConstants.sectionChooseTemplate,
           style: Theme.of(context).textTheme.titleLarge?.copyWith(
                 fontWeight: FontWeight.bold,
               ),
