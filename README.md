@@ -21,16 +21,16 @@ SNS Auto는 여러 장의 사진을 선택하면 자동으로 슬라이드쇼 �
 - 영상 길이에 맞춰 자동 트림
 - 마지막 1초 페이드아웃 효과
 
-#### 📁 BGM 파일 위치
-```
-/Android/data/com.example.sns_auto/files/bgm/bgm_default.mp3
-```
+#### 📝 BGM 파일 추가 방법 (개발자용)
 
-#### 📝 BGM 파일 추가 방법
-1. Android 기기에서 파일 관리자를 엽니다
-2. 위 경로로 이동합니다 (앱 실행 시 자동으로 디렉토리가 생성됩니다)
-3. `bgm_default.mp3` 이름으로 MP3 파일을 복사합니다
-4. 앱에서 영상을 렌더링하면 자동으로 배경음악이 적용됩니다
+**앱에 BGM을 내장하려면:**
+1. 무료 음악 다운로드 (예: [Pixabay](https://pixabay.com/music/), [Bensound](https://www.bensound.com/))
+2. MP3 파일 이름을 `bgm_default.mp3`로 변경
+3. VSCode에서 `android/app/src/main/res/raw/` 폴더에 복사
+4. 앱 빌드 및 실행 시 자동으로 외부 저장소로 복사됩니다
+
+**사용자가 BGM을 교체하려면:**
+- 파일 관리자에서 `/Android/data/com.example.sns_auto/files/bgm/bgm_default.mp3` 경로에 MP3 파일 복사
 
 **참고**: BGM 파일이 없으면 무음으로 영상이 생성됩니다.
 

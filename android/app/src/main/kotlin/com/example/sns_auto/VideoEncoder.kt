@@ -128,6 +128,8 @@ class VideoEncoder(private val context: Context) {
     /**
      * Get the BGM file path from external storage
      * Path: /Android/data/com.example.sns_auto/files/bgm/bgm_default.mp3
+     *
+     * If the file doesn't exist but exists in res/raw, it will be copied automatically.
      */
     private fun getBgmFilePath(): String? {
         return try {
@@ -139,7 +141,15 @@ class VideoEncoder(private val context: Context) {
                     bgmDir.mkdirs()
                     Log.d(TAG, "Created BGM directory: ${bgmDir.absolutePath}")
                 }
+
                 val bgmFile = File(bgmDir, "bgm_default.mp3")
+
+                // If BGM doesn't exist in external storage, try to copy from res/raw
+                if (!bgmFile.exists()) {
+                    Log.d(TAG, "BGM not found in external storage, checking res/raw...")
+                    copyBgmFromResources(bgmFile)
+                }
+
                 bgmFile.absolutePath
             } else {
                 null
@@ -147,6 +157,33 @@ class VideoEncoder(private val context: Context) {
         } catch (e: Exception) {
             Log.e(TAG, "Error getting BGM file path: ${e.message}")
             null
+        }
+    }
+
+    /**
+     * Copy BGM from app resources (res/raw) to external storage
+     * Resource ID: R.raw.bgm_default
+     */
+    private fun copyBgmFromResources(destinationFile: File) {
+        try {
+            // Check if bgm_default exists in res/raw
+            val resourceId = context.resources.getIdentifier("bgm_default", "raw", context.packageName)
+
+            if (resourceId != 0) {
+                Log.d(TAG, "Found BGM in res/raw, copying to external storage...")
+
+                context.resources.openRawResource(resourceId).use { inputStream ->
+                    FileOutputStream(destinationFile).use { outputStream ->
+                        inputStream.copyTo(outputStream)
+                    }
+                }
+
+                Log.d(TAG, "BGM copied successfully: ${destinationFile.absolutePath}")
+            } else {
+                Log.d(TAG, "No BGM found in res/raw (R.raw.bgm_default not found)")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to copy BGM from resources: ${e.message}", e)
         }
     }
 
@@ -508,8 +545,17 @@ class VideoEncoder(private val context: Context) {
      *
      * @param bitmaps List of prepared image bitmaps
      * @param frameIndex Current frame number (0-based)
-     * @param framesPerImage How many frames each image is shown
-     * @param crossfadeFrames How many frames the crossfade lasts
+     * @param framesPerImage How many frames each image is shown (e.g., 45 for 1.5s at 30fps)
+     * @param crossfadeFrames How many frames the crossfade lasts (e.g., 15 for 0.5s at 30fps)
+     *
+     * Timeline example with 3 images (framesPerImage=45, crossfadeFrames=15):
+     * - Frames 0-29:   Image 0 only
+     * - Frames 30-44:  Image 0 → Image 1 crossfade
+     * - Frames 45-59:  Image 1 only
+     * - Frames 60-74:  Image 1 → Image 2 crossfade
+     * - Frames 75-89:  Image 2 only
+     *
+     * Each image displays for 45 frames (1.5s), with 15-frame (0.5s) overlap
      */
     private fun generateFrame(
         bitmaps: List<Bitmap>,
@@ -517,24 +563,36 @@ class VideoEncoder(private val context: Context) {
         framesPerImage: Int,
         crossfadeFrames: Int
     ): Bitmap {
-        // Calculate which image(s) to show
+        // Calculate the offset between image start times (accounting for overlap)
         val frameOffset = framesPerImage - crossfadeFrames
 
-        // Determine current image index
-        val currentImageIndex = (frameIndex / frameOffset).coerceAtMost(bitmaps.size - 1)
+        // Find which image we're primarily showing
+        var currentImageIndex = frameIndex / frameOffset
 
-        // Check if we're in a crossfade region
+        // Handle last image edge case
+        if (currentImageIndex >= bitmaps.size) {
+            currentImageIndex = bitmaps.size - 1
+        }
+
+        // Calculate position within this image's display time
         val frameInCurrentImage = frameIndex - (currentImageIndex * frameOffset)
-        val isInCrossfade = frameInCurrentImage >= framesPerImage - crossfadeFrames &&
-                currentImageIndex < bitmaps.size - 1
+
+        // Determine if we're in a crossfade period
+        val crossfadeStart = framesPerImage - crossfadeFrames
+        val isInCrossfade = frameInCurrentImage >= crossfadeStart &&
+                           currentImageIndex < bitmaps.size - 1
 
         return if (isInCrossfade) {
             // Crossfade between current and next image
             val nextImageIndex = currentImageIndex + 1
-            val crossfadeProgress = (frameInCurrentImage - (framesPerImage - crossfadeFrames)).toFloat() / crossfadeFrames
+            val crossfadeFrameIndex = frameInCurrentImage - crossfadeStart
+            val crossfadeProgress = crossfadeFrameIndex.toFloat() / crossfadeFrames
+
+            Log.v(TAG, "Frame $frameIndex: Crossfade ${currentImageIndex}→${nextImageIndex} (${(crossfadeProgress * 100).toInt()}%)")
             crossfadeBitmaps(bitmaps[currentImageIndex], bitmaps[nextImageIndex], crossfadeProgress)
         } else {
             // Show single image
+            Log.v(TAG, "Frame $frameIndex: Image $currentImageIndex")
             bitmaps[currentImageIndex].copy(Bitmap.Config.ARGB_8888, false)
         }
     }
