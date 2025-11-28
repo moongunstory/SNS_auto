@@ -65,7 +65,7 @@ class _UploadScreenState extends State<UploadScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Upload to SNS'),
+        title: const Text(AppConstants.titleUpload),
         backgroundColor: Theme.of(context).colorScheme.primaryContainer,
       ),
       body: SafeArea(
@@ -117,7 +117,7 @@ class _UploadScreenState extends State<UploadScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          'Video Preview',
+          AppConstants.sectionVideoPreview,
           style: Theme.of(context).textTheme.titleLarge?.copyWith(
                 fontWeight: FontWeight.bold,
               ),
@@ -162,7 +162,7 @@ class _UploadScreenState extends State<UploadScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          'Upload To',
+          AppConstants.sectionUploadTo,
           style: Theme.of(context).textTheme.titleLarge?.copyWith(
                 fontWeight: FontWeight.bold,
               ),
@@ -171,28 +171,28 @@ class _UploadScreenState extends State<UploadScreen> {
         const SizedBox(height: AppConstants.paddingSmall),
 
         PlatformCheckbox(
-          label: 'Facebook Page',
+          label: AppConstants.platformFacebookPage,
           icon: Icons.facebook,
           value: _uploadFacebookPage,
           onChanged: (value) => setState(() => _uploadFacebookPage = value!),
         ),
 
         PlatformCheckbox(
-          label: 'Instagram Reels',
+          label: AppConstants.platformInstagramReels,
           icon: Icons.photo_camera,
           value: _uploadInstagram,
           onChanged: (value) => setState(() => _uploadInstagram = value!),
         ),
 
         PlatformCheckbox(
-          label: 'YouTube Shorts',
+          label: AppConstants.platformYouTubeShorts,
           icon: Icons.video_library,
           value: _uploadYouTube,
           onChanged: (value) => setState(() => _uploadYouTube = value!),
         ),
 
         PlatformCheckbox(
-          label: 'TikTok',
+          label: AppConstants.platformTikTok,
           icon: Icons.music_note,
           value: _uploadTikTok,
           onChanged: (value) => setState(() => _uploadTikTok = value!),
@@ -206,7 +206,7 @@ class _UploadScreenState extends State<UploadScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          'Caption',
+          AppConstants.sectionCaption,
           style: Theme.of(context).textTheme.titleMedium?.copyWith(
                 fontWeight: FontWeight.bold,
               ),
@@ -219,7 +219,7 @@ class _UploadScreenState extends State<UploadScreen> {
           maxLines: 4,
           maxLength: AppConstants.instagramCaptionMaxLength,
           decoration: InputDecoration(
-            hintText: 'Enter your caption here...',
+            hintText: AppConstants.hintCaptionInput,
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(AppConstants.borderRadiusMedium),
             ),
@@ -234,7 +234,7 @@ class _UploadScreenState extends State<UploadScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          'Platform-Specific Tags',
+          AppConstants.sectionPlatformTags,
           style: Theme.of(context).textTheme.titleMedium?.copyWith(
                 fontWeight: FontWeight.bold,
               ),
@@ -247,8 +247,8 @@ class _UploadScreenState extends State<UploadScreen> {
           TextField(
             controller: _instagramTagsController,
             decoration: InputDecoration(
-              labelText: 'Instagram hashtags',
-              hintText: '#tag1 #tag2 #tag3',
+              labelText: AppConstants.labelInstagramHashtags,
+              hintText: AppConstants.hintInstagramTags,
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(AppConstants.borderRadiusSmall),
               ),
@@ -262,8 +262,8 @@ class _UploadScreenState extends State<UploadScreen> {
           TextField(
             controller: _youtubeTagsController,
             decoration: InputDecoration(
-              labelText: 'YouTube tags',
-              hintText: 'tag1, tag2, tag3',
+              labelText: AppConstants.labelYouTubeTags,
+              hintText: AppConstants.hintYouTubeTags,
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(AppConstants.borderRadiusSmall),
               ),
@@ -277,8 +277,8 @@ class _UploadScreenState extends State<UploadScreen> {
           TextField(
             controller: _tiktokTagsController,
             decoration: InputDecoration(
-              labelText: 'TikTok hashtags',
-              hintText: '#tag1 #tag2 #tag3',
+              labelText: AppConstants.labelTikTokHashtags,
+              hintText: AppConstants.hintTikTokTags,
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(AppConstants.borderRadiusSmall),
               ),
@@ -294,7 +294,7 @@ class _UploadScreenState extends State<UploadScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          'Upload Status',
+          AppConstants.sectionUploadStatus,
           style: Theme.of(context).textTheme.titleLarge?.copyWith(
                 fontWeight: FontWeight.bold,
               ),
@@ -453,7 +453,7 @@ class _UploadScreenState extends State<UploadScreen> {
     });
 
     // Show completion message
-    _showSuccess('Upload process completed!');
+    _showSuccess(AppConstants.messageUploadComplete);
   }
 
   Future<void> _uploadToFacebookPage(String caption) async {

@@ -78,27 +78,37 @@ class VideoEncoder(private val context: Context) {
 
         Log.d(TAG, "Video will be $totalFrames frames (${videoDurationUs / 1_000_000.0}s)")
 
+        // Check for BGM file
+        val bgmPath = getBgmFilePath()
+        val hasBgm = bgmPath != null && File(bgmPath).exists()
+        if (hasBgm) {
+            Log.d(TAG, "BGM file found: $bgmPath")
+        } else {
+            Log.d(TAG, "No BGM file found, rendering video without audio")
+        }
+
         // Load and prepare images
         val bitmaps = loadAndPrepareImages(imagePaths)
 
         try {
-            // For simplicity, we'll encode video-only first
-            // (Adding audio requires more complex track synchronization)
-
             // Setup MediaMuxer
             val muxer = MediaMuxer(outputPath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
 
-            // Encode video track
-            encodeVideoTrack(
+            // Encode video and audio tracks
+            val trackIndices = encodeVideoAndAudio(
                 muxer = muxer,
                 bitmaps = bitmaps,
                 totalFrames = totalFrames,
                 framesPerImage = framesPerImage,
-                crossfadeFrames = crossfadeFrames
+                crossfadeFrames = crossfadeFrames,
+                videoDurationUs = videoDurationUs,
+                bgmPath = bgmPath
             )
 
-            // Finalize muxer
-            muxer.stop()
+            // Finalize muxer (only if it was started)
+            if (trackIndices.muxerStarted) {
+                muxer.stop()
+            }
             muxer.release()
 
             Log.d(TAG, "Video encoding complete: $outputPath")
@@ -114,6 +124,40 @@ class VideoEncoder(private val context: Context) {
             throw e
         }
     }
+
+    /**
+     * Get the BGM file path from external storage
+     * Path: /Android/data/com.example.sns_auto/files/bgm/bgm_default.mp3
+     */
+    private fun getBgmFilePath(): String? {
+        return try {
+            val externalFilesDir = context.getExternalFilesDir(null)
+            if (externalFilesDir != null) {
+                val bgmDir = File(externalFilesDir, "bgm")
+                // Create directory if it doesn't exist
+                if (!bgmDir.exists()) {
+                    bgmDir.mkdirs()
+                    Log.d(TAG, "Created BGM directory: ${bgmDir.absolutePath}")
+                }
+                val bgmFile = File(bgmDir, "bgm_default.mp3")
+                bgmFile.absolutePath
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting BGM file path: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Track indices returned from encoding
+     */
+    private data class TrackIndices(
+        val videoTrackIndex: Int,
+        val audioTrackIndex: Int,
+        val muxerStarted: Boolean
+    )
 
     /**
      * Calculate total number of frames for the video
@@ -218,103 +262,244 @@ class VideoEncoder(private val context: Context) {
     }
 
     /**
-     * Encode the video track with crossfade transitions
+     * Encode video and audio tracks together
+     * This method properly handles MediaCodec INFO_OUTPUT_FORMAT_CHANGED event
      */
-    private fun encodeVideoTrack(
+    private fun encodeVideoAndAudio(
         muxer: MediaMuxer,
         bitmaps: List<Bitmap>,
         totalFrames: Int,
         framesPerImage: Int,
-        crossfadeFrames: Int
-    ): Int {
-        Log.d(TAG, "Encoding video track...")
+        crossfadeFrames: Int,
+        videoDurationUs: Long,
+        bgmPath: String?
+    ): TrackIndices {
+        Log.d(TAG, "Encoding video and audio tracks...")
 
         // Configure video format
-        val format = MediaFormat.createVideoFormat(VIDEO_MIME_TYPE, VIDEO_WIDTH, VIDEO_HEIGHT).apply {
+        val videoFormat = MediaFormat.createVideoFormat(VIDEO_MIME_TYPE, VIDEO_WIDTH, VIDEO_HEIGHT).apply {
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
             setInteger(MediaFormat.KEY_BIT_RATE, VIDEO_BITRATE)
             setInteger(MediaFormat.KEY_FRAME_RATE, VIDEO_FPS)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, VIDEO_I_FRAME_INTERVAL)
         }
 
-        // Create and configure encoder
-        val encoder = MediaCodec.createEncoderByType(VIDEO_MIME_TYPE)
-        encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-        val inputSurface = encoder.createInputSurface()
-        encoder.start()
+        // Create and configure video encoder
+        val videoEncoder = MediaCodec.createEncoderByType(VIDEO_MIME_TYPE)
+        videoEncoder.configure(videoFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+        val inputSurface = videoEncoder.createInputSurface()
+        videoEncoder.start()
 
         var videoTrackIndex = -1
-        var frameIndex = 0
-        val frameIntervalUs = 1_000_000L / VIDEO_FPS
+        var audioTrackIndex = -1
         var muxerStarted = false
 
+        // Extract audio samples if BGM is available
+        val audioSamples = if (bgmPath != null && File(bgmPath).exists()) {
+            try {
+                Log.d(TAG, "Extracting audio from BGM: $bgmPath")
+                extractAudioSamplesFromFile(bgmPath, videoDurationUs)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to extract audio: ${e.message}", e)
+                null
+            }
+        } else {
+            null
+        }
+
+        // Create audio encoder if we have samples
+        val audioEncoder = if (audioSamples != null && audioSamples.isNotEmpty()) {
+            Log.d(TAG, "Creating audio encoder with ${audioSamples.size} samples")
+            val audioFormat = MediaFormat.createAudioFormat(
+                AUDIO_MIME_TYPE,
+                AUDIO_SAMPLE_RATE,
+                AUDIO_CHANNELS
+            ).apply {
+                setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
+                setInteger(MediaFormat.KEY_BIT_RATE, AUDIO_BITRATE)
+            }
+            MediaCodec.createEncoderByType(AUDIO_MIME_TYPE).apply {
+                configure(audioFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                start()
+            }
+        } else {
+            Log.d(TAG, "No audio encoder (no BGM)")
+            null
+        }
+
         try {
-            // Encode all frames
-            while (frameIndex < totalFrames) {
-                // Generate and draw frame
-                val canvas = inputSurface.lockCanvas(null)
-                val frame = generateFrame(bitmaps, frameIndex, framesPerImage, crossfadeFrames)
-                canvas.drawBitmap(frame, 0f, 0f, null)
-                frame.recycle()
-                inputSurface.unlockCanvasAndPost(canvas)
+            var frameIndex = 0
+            val frameIntervalUs = 1_000_000L / VIDEO_FPS
+            var videoInputDone = false
+            var audioInputDone = audioEncoder == null // If no audio, mark as done
+            var audioInputOffset = 0
+            val audioInputBufferSize = 2048
 
-                // Feed frame timestamp to encoder
-                val presentationTimeUs = frameIndex * frameIntervalUs
-                frameIndex++
+            // Main encoding loop
+            while (!videoInputDone || !audioInputDone ||
+                   videoTrackIndex < 0 || (audioEncoder != null && audioTrackIndex < 0)) {
 
-                // Retrieve encoded data
-                val bufferInfo = MediaCodec.BufferInfo()
-                var outputBufferIndex = encoder.dequeueOutputBuffer(bufferInfo, CODEC_TIMEOUT_US)
+                // Feed video frames
+                if (!videoInputDone && frameIndex < totalFrames) {
+                    val canvas = inputSurface.lockCanvas(null)
+                    val frame = generateFrame(bitmaps, frameIndex, framesPerImage, crossfadeFrames)
+                    canvas.drawBitmap(frame, 0f, 0f, null)
+                    frame.recycle()
+                    inputSurface.unlockCanvasAndPost(canvas)
 
-                while (outputBufferIndex >= 0) {
-                    val encodedData = encoder.getOutputBuffer(outputBufferIndex)
-                        ?: throw RuntimeException("Encoder output buffer was null")
+                    frameIndex++
 
-                    if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
-                        // Codec config info - don't write to muxer
-                        bufferInfo.size = 0
+                    if (frameIndex >= totalFrames) {
+                        videoEncoder.signalEndOfInputStream()
+                        videoInputDone = true
+                        Log.d(TAG, "All video frames submitted")
                     }
 
-                    if (bufferInfo.size != 0) {
-                        if (!muxerStarted) {
-                            throw RuntimeException("Muxer not started before writing video data")
+                    if (frameIndex % 30 == 0) {
+                        Log.d(TAG, "Submitted video frame $frameIndex/$totalFrames")
+                    }
+                }
+
+                // Feed audio samples
+                if (audioEncoder != null && audioSamples != null && !audioInputDone) {
+                    val inputBufferId = audioEncoder.dequeueInputBuffer(CODEC_TIMEOUT_US)
+                    if (inputBufferId >= 0) {
+                        val inputBuffer = audioEncoder.getInputBuffer(inputBufferId)!!
+                        inputBuffer.clear()
+
+                        val samplesToWrite = min(audioInputBufferSize, audioSamples.size - audioInputOffset)
+                        if (samplesToWrite > 0) {
+                            val byteBuffer = ByteBuffer.allocate(samplesToWrite * 2)
+                            for (i in 0 until samplesToWrite) {
+                                byteBuffer.putShort(audioSamples[audioInputOffset + i])
+                            }
+                            inputBuffer.put(byteBuffer.array())
+
+                            val presentationTimeUs = (audioInputOffset * 1_000_000L) / (AUDIO_SAMPLE_RATE * AUDIO_CHANNELS)
+                            audioEncoder.queueInputBuffer(inputBufferId, 0, samplesToWrite * 2, presentationTimeUs, 0)
+
+                            audioInputOffset += samplesToWrite
+                        } else {
+                            audioEncoder.queueInputBuffer(inputBufferId, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                            audioInputDone = true
+                            Log.d(TAG, "All audio samples submitted")
                         }
-
-                        // Write encoded data to muxer
-                        encodedData.position(bufferInfo.offset)
-                        encodedData.limit(bufferInfo.offset + bufferInfo.size)
-                        muxer.writeSampleData(videoTrackIndex, encodedData, bufferInfo)
                     }
-
-                    encoder.releaseOutputBuffer(outputBufferIndex, false)
-                    outputBufferIndex = encoder.dequeueOutputBuffer(bufferInfo, CODEC_TIMEOUT_US)
                 }
 
-                // Check for format change (track index)
-                if (videoTrackIndex < 0) {
-                    val outputFormat = encoder.outputFormat
-                    videoTrackIndex = muxer.addTrack(outputFormat)
-                    muxer.start()
-                    muxerStarted = true
-                    Log.d(TAG, "Video track added, muxer started")
+                // Process video encoder output
+                val videoBufferInfo = MediaCodec.BufferInfo()
+                var videoOutputIndex = videoEncoder.dequeueOutputBuffer(videoBufferInfo, CODEC_TIMEOUT_US)
+
+                when (videoOutputIndex) {
+                    MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                        if (videoTrackIndex >= 0) {
+                            throw RuntimeException("Video format changed twice")
+                        }
+                        val outputFormat = videoEncoder.outputFormat
+                        videoTrackIndex = muxer.addTrack(outputFormat)
+                        Log.d(TAG, "Video track added to muxer (index: $videoTrackIndex)")
+
+                        // Start muxer if all tracks are ready
+                        if ((audioEncoder == null || audioTrackIndex >= 0) && !muxerStarted) {
+                            muxer.start()
+                            muxerStarted = true
+                            Log.d(TAG, "Muxer started (video only)")
+                        }
+                    }
+                    MediaCodec.INFO_TRY_AGAIN_LATER -> {
+                        // No output available yet
+                    }
+                    else -> {
+                        if (videoOutputIndex >= 0) {
+                            val encodedData = videoEncoder.getOutputBuffer(videoOutputIndex)
+                                ?: throw RuntimeException("Video encoder output buffer was null")
+
+                            // Skip codec config data
+                            if (videoBufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
+                                videoBufferInfo.size = 0
+                            }
+
+                            if (videoBufferInfo.size != 0 && muxerStarted) {
+                                encodedData.position(videoBufferInfo.offset)
+                                encodedData.limit(videoBufferInfo.offset + videoBufferInfo.size)
+                                muxer.writeSampleData(videoTrackIndex, encodedData, videoBufferInfo)
+                            }
+
+                            videoEncoder.releaseOutputBuffer(videoOutputIndex, false)
+
+                            if (videoBufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+                                Log.d(TAG, "Video encoding complete")
+                                if (audioEncoder == null) {
+                                    break // Exit if no audio
+                                }
+                            }
+                        }
+                    }
                 }
 
-                if (frameIndex % 30 == 0) {
-                    Log.d(TAG, "Encoded video frame $frameIndex/$totalFrames")
+                // Process audio encoder output
+                if (audioEncoder != null) {
+                    val audioBufferInfo = MediaCodec.BufferInfo()
+                    var audioOutputIndex = audioEncoder.dequeueOutputBuffer(audioBufferInfo, CODEC_TIMEOUT_US)
+
+                    when (audioOutputIndex) {
+                        MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                            if (audioTrackIndex >= 0) {
+                                throw RuntimeException("Audio format changed twice")
+                            }
+                            val outputFormat = audioEncoder.outputFormat
+                            audioTrackIndex = muxer.addTrack(outputFormat)
+                            Log.d(TAG, "Audio track added to muxer (index: $audioTrackIndex)")
+
+                            // Start muxer if all tracks are ready
+                            if (videoTrackIndex >= 0 && !muxerStarted) {
+                                muxer.start()
+                                muxerStarted = true
+                                Log.d(TAG, "Muxer started (video + audio)")
+                            }
+                        }
+                        MediaCodec.INFO_TRY_AGAIN_LATER -> {
+                            // No output available yet
+                        }
+                        else -> {
+                            if (audioOutputIndex >= 0) {
+                                val encodedData = audioEncoder.getOutputBuffer(audioOutputIndex)
+                                    ?: throw RuntimeException("Audio encoder output buffer was null")
+
+                                // Skip codec config data
+                                if (audioBufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
+                                    audioBufferInfo.size = 0
+                                }
+
+                                if (audioBufferInfo.size != 0 && muxerStarted) {
+                                    encodedData.position(audioBufferInfo.offset)
+                                    encodedData.limit(audioBufferInfo.offset + audioBufferInfo.size)
+                                    muxer.writeSampleData(audioTrackIndex, encodedData, audioBufferInfo)
+                                }
+
+                                audioEncoder.releaseOutputBuffer(audioOutputIndex, false)
+
+                                if (audioBufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+                                    Log.d(TAG, "Audio encoding complete")
+                                    if (videoInputDone && (videoBufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0)) {
+                                        break // Exit if both are done
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
-            // Signal end of stream
-            encoder.signalEndOfInputStream()
-
-            // Drain remaining output
-            drainEncoder(encoder, muxer, videoTrackIndex)
-
-            return videoTrackIndex
+            Log.d(TAG, "Encoding finished successfully")
+            return TrackIndices(videoTrackIndex, audioTrackIndex, muxerStarted)
         } finally {
-            encoder.stop()
-            encoder.release()
+            videoEncoder.stop()
+            videoEncoder.release()
             inputSurface.release()
+            audioEncoder?.stop()
+            audioEncoder?.release()
         }
     }
 
@@ -381,65 +566,16 @@ class VideoEncoder(private val context: Context) {
     }
 
     /**
-     * Encode audio track from background music resource
+     * Extract audio samples from file path
      *
-     * Loads BGM from res/raw/bgm_default.mp3 and encodes it to match video duration
-     * with a 1-second fade-out at the end
+     * Extracts PCM audio samples from the BGM file, trimming to video duration
+     * and applying 1-second fade-out at the end
      */
-    private fun encodeAudioTrack(muxer: MediaMuxer, videoDurationUs: Long): Int {
-        Log.d(TAG, "Encoding audio track...")
-
-        // Try to load BGM from resources
-        val bgmResId = context.resources.getIdentifier("bgm_default", "raw", context.packageName)
-        if (bgmResId == 0) {
-            Log.w(TAG, "No BGM resource found (res/raw/bgm_default.mp3), skipping audio track")
-            return -1 // No audio track
-        }
-
-        try {
-            // Extract and decode BGM
-            val bgmSamples = extractAudioSamples(bgmResId, videoDurationUs)
-
-            // Configure audio format
-            val format = MediaFormat.createAudioFormat(
-                AUDIO_MIME_TYPE,
-                AUDIO_SAMPLE_RATE,
-                AUDIO_CHANNELS
-            ).apply {
-                setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
-                setInteger(MediaFormat.KEY_BIT_RATE, AUDIO_BITRATE)
-            }
-
-            // Create and configure encoder
-            val encoder = MediaCodec.createEncoderByType(AUDIO_MIME_TYPE)
-            encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-            encoder.start()
-
-            var audioTrackIndex = -1
-
-            try {
-                // Encode audio samples
-                audioTrackIndex = feedAudioEncoder(encoder, muxer, bgmSamples, videoDurationUs)
-                return audioTrackIndex
-            } finally {
-                encoder.stop()
-                encoder.release()
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to encode audio track: ${e.message}", e)
-            return -1 // Continue without audio
-        }
-    }
-
-    /**
-     * Extract audio samples from resource file
-     */
-    private fun extractAudioSamples(resId: Int, maxDurationUs: Long): ShortArray {
+    private fun extractAudioSamplesFromFile(filePath: String, maxDurationUs: Long): ShortArray {
         val extractor = MediaExtractor()
-        val afd = context.resources.openRawResourceFd(resId)
 
         try {
-            extractor.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+            extractor.setDataSource(filePath)
 
             // Find audio track
             var audioTrackIndex = -1
@@ -523,10 +659,10 @@ class VideoEncoder(private val context: Context) {
                 decoder.release()
             }
 
+            Log.d(TAG, "Extracted ${samples.size} audio samples (${samples.size / (AUDIO_SAMPLE_RATE * AUDIO_CHANNELS)}s)")
             return samples.toShortArray()
         } finally {
             extractor.release()
-            afd.close()
         }
     }
 
@@ -554,112 +690,4 @@ class VideoEncoder(private val context: Context) {
         }
     }
 
-    /**
-     * Feed audio samples to encoder and write to muxer
-     */
-    private fun feedAudioEncoder(
-        encoder: MediaCodec,
-        muxer: MediaMuxer,
-        samples: ShortArray,
-        videoDurationUs: Long
-    ): Int {
-        var audioTrackIndex = -1
-        var inputOffset = 0
-        val inputBufferSize = 2048 // samples per chunk
-        var inputDone = false
-        val bufferInfo = MediaCodec.BufferInfo()
-
-        while (!inputDone || inputOffset < samples.size) {
-            // Feed input
-            if (!inputDone) {
-                val inputBufferId = encoder.dequeueInputBuffer(CODEC_TIMEOUT_US)
-                if (inputBufferId >= 0) {
-                    val inputBuffer = encoder.getInputBuffer(inputBufferId)!!
-                    inputBuffer.clear()
-
-                    val samplesToWrite = min(inputBufferSize, samples.size - inputOffset)
-                    if (samplesToWrite > 0) {
-                        // Convert short samples to bytes
-                        val byteBuffer = ByteBuffer.allocate(samplesToWrite * 2)
-                        for (i in 0 until samplesToWrite) {
-                            byteBuffer.putShort(samples[inputOffset + i])
-                        }
-                        inputBuffer.put(byteBuffer.array())
-
-                        val presentationTimeUs = (inputOffset * 1_000_000L) / (AUDIO_SAMPLE_RATE * AUDIO_CHANNELS)
-                        encoder.queueInputBuffer(inputBufferId, 0, samplesToWrite * 2, presentationTimeUs, 0)
-
-                        inputOffset += samplesToWrite
-                    } else {
-                        encoder.queueInputBuffer(inputBufferId, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-                        inputDone = true
-                    }
-                }
-            }
-
-            // Get output
-            val outputBufferId = encoder.dequeueOutputBuffer(bufferInfo, CODEC_TIMEOUT_US)
-            if (outputBufferId >= 0) {
-                val encodedData = encoder.getOutputBuffer(outputBufferId)!!
-
-                if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
-                    bufferInfo.size = 0
-                }
-
-                if (bufferInfo.size != 0) {
-                    if (audioTrackIndex < 0) {
-                        throw RuntimeException("Audio track not added to muxer")
-                    }
-
-                    encodedData.position(bufferInfo.offset)
-                    encodedData.limit(bufferInfo.offset + bufferInfo.size)
-                    muxer.writeSampleData(audioTrackIndex, encodedData, bufferInfo)
-                }
-
-                encoder.releaseOutputBuffer(outputBufferId, false)
-
-                if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
-                    break
-                }
-            } else if (outputBufferId == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                if (audioTrackIndex >= 0) {
-                    throw RuntimeException("Audio format changed twice")
-                }
-                audioTrackIndex = muxer.addTrack(encoder.outputFormat)
-                Log.d(TAG, "Audio track added to muxer")
-            }
-        }
-
-        return audioTrackIndex
-    }
-
-    /**
-     * Drain remaining output from encoder
-     */
-    private fun drainEncoder(encoder: MediaCodec, muxer: MediaMuxer, trackIndex: Int) {
-        val bufferInfo = MediaCodec.BufferInfo()
-        var outputDone = false
-
-        while (!outputDone) {
-            val outputBufferId = encoder.dequeueOutputBuffer(bufferInfo, CODEC_TIMEOUT_US)
-
-            if (outputBufferId >= 0) {
-                val encodedData = encoder.getOutputBuffer(outputBufferId)!!
-
-                if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0 && bufferInfo.size != 0) {
-                    encodedData.position(bufferInfo.offset)
-                    encodedData.limit(bufferInfo.offset + bufferInfo.size)
-                    muxer.writeSampleData(trackIndex, encodedData, bufferInfo)
-                }
-
-                encoder.releaseOutputBuffer(outputBufferId, false)
-
-                if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
-                    outputDone = true
-                }
-            } else if (outputBufferId == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                // No output available yet
-            }
-        }
-    }
 }

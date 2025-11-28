@@ -21,11 +21,11 @@ class UploadTarget {
     return uploadFacebookPage || uploadInstagram || uploadYouTube || uploadTikTok;
   }
 
-  /// Returns a list of selected platform names
+  /// Returns a list of selected platform names (Korean)
   List<String> getSelectedPlatforms() {
     final platforms = <String>[];
-    if (uploadFacebookPage) platforms.add('Facebook Page');
-    if (uploadInstagram) platforms.add('Instagram Reels');
+    if (uploadFacebookPage) platforms.add('Facebook 페이지');
+    if (uploadInstagram) platforms.add('Instagram 릴스');
     if (uploadYouTube) platforms.add('YouTube Shorts');
     if (uploadTikTok) platforms.add('TikTok');
     return platforms;
@@ -100,13 +100,13 @@ class PlatformUploadState {
   String getStatusText() {
     switch (status) {
       case UploadStatus.pending:
-        return 'Pending';
+        return '대기 중';
       case UploadStatus.uploading:
-        return 'Uploading... ${(progress * 100).toInt()}%';
+        return '업로드 중... ${(progress * 100).toInt()}%';
       case UploadStatus.success:
-        return 'Success';
+        return '완료';
       case UploadStatus.failed:
-        return 'Failed${errorMessage != null ? ": $errorMessage" : ""}';
+        return '실패${errorMessage != null ? ": $errorMessage" : ""}';
     }
   }
 }
