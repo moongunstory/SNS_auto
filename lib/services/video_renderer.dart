@@ -1,9 +1,7 @@
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
-import 'package:ffmpeg_kit_flutter/ffmpeg_kit.dart';
-import 'package:ffmpeg_kit_flutter/return_code.dart';
-import 'package:ffmpeg_kit_flutter/statistics.dart';
+import 'package:flutter_ffmpeg_lts_custom/flutter_ffmpeg.dart';
 
 import '../models/render_job.dart';
 import '../models/template_model.dart';
@@ -166,45 +164,38 @@ class VideoRenderer {
     return listFile.path;
   }
 
-  /// Execute FFmpeg command with progress tracking
+  // Execute FFmpeg command with progress tracking
   Future<Result<String, String>> _executeFFmpegCommand({
     required String command,
     required void Function(double progress) onProgress,
     required double estimatedDurationSeconds,
   }) async {
-    // Track progress
-    double currentProgress = 0.0;
+    try {
+      final FlutterFFmpeg _ffmpeg = FlutterFFmpeg();
 
-    // Execute FFmpeg
-    final session = await FFmpegKit.execute(command);
+      // Simulate progress while rendering
+      _simulateProgress(onProgress, estimatedDurationSeconds);
 
-    // Set up statistics callback for progress
-    // Note: We need to handle this differently as FFmpegKit doesn't provide
-    // a simple progress callback. For MVP, we'll simulate progress.
+      // Execute FFmpeg
+      final int rc = await _ffmpeg.execute(command);
 
-    // Simulate progress updates (TODO: use actual FFmpeg statistics)
-    _simulateProgress(onProgress, estimatedDurationSeconds);
+      if (rc == 0) {
+        // Extract output path from command
+        final outputMatch = RegExp(r'"([^"]+\.mp4)"').allMatches(command).last;
+        final outputPath = outputMatch.group(1)!;
 
-    // Get return code
-    final returnCode = await session.getReturnCode();
-
-    if (ReturnCode.isSuccess(returnCode)) {
-      // Extract output path from command
-      final outputMatch = RegExp(r'"([^"]+\.mp4)"').allMatches(command).last;
-      final outputPath = outputMatch.group(1)!;
-
-      // Verify file exists
-      final outputFile = File(outputPath);
-      if (await outputFile.exists()) {
-        onProgress(1.0); // Complete
-        return Success(outputPath);
+        final outputFile = File(outputPath);
+        if (await outputFile.exists()) {
+          onProgress(1.0);
+          return Success(outputPath);
+        } else {
+          return Error('Output file not created');
+        }
       } else {
-        return Error('Output file not created');
+        return Error('FFmpeg failed with return code: $rc');
       }
-    } else {
-      final output = await session.getOutput();
-      final failStackTrace = await session.getFailStackTrace();
-      return Error('FFmpeg failed: $output\n$failStackTrace');
+    } catch (e) {
+      return Error('FFmpeg error: $e');
     }
   }
 
