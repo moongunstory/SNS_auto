@@ -1,7 +1,6 @@
 plugins {
     id "com.android.application"
     id "kotlin-android"
-    // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id "dev.flutter.flutter-gradle-plugin"
 }
 
@@ -13,45 +12,40 @@ if (localPropertiesFile.exists()) {
     }
 }
 
-def flutterVersionCode = localProperties.getProperty("flutter.versionCode")
-if (flutterVersionCode == null) {
-    flutterVersionCode = "1"
-}
-
-def flutterVersionName = localProperties.getProperty("flutter.versionName")
-if (flutterVersionName == null) {
-    flutterVersionName = "1.0"
-}
+def flutterVersionCode = localProperties.getProperty("flutter.versionCode") ?: "1"
+def flutterVersionName = localProperties.getProperty("flutter.versionName") ?: "1.0"
 
 android {
-    namespace = "com.example.sns_auto"
-
-    // ★ 수정: Flutter 값 대신 명시적으로 35
-    compileSdk = 35
-
-    ndkVersion = flutter.ndkVersion
-
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_1_8
-        targetCompatibility = JavaVersion.VERSION_1_8
-    }
+    namespace "com.example.sns_auto"
+    compileSdk 34
 
     defaultConfig {
-        applicationId = "com.example.sns_auto"
-
-        minSdk = 24
-
-        // ★ 수정: flutter.targetSdkVersion → 명시적으로 35
-        targetSdk = 35
-
-        versionCode = flutterVersionCode.toInteger()
-        versionName = flutterVersionName
+        applicationId "com.example.sns_auto"
+        minSdk 24
+        targetSdk 34
+        versionCode flutterVersionCode.toInteger()
+        versionName flutterVersionName
     }
 
     buildTypes {
-        release {
-            signingConfig = signingConfigs.debug
+        debug {
+            minifyEnabled false
+            shrinkResources false
         }
+        release {
+            minifyEnabled false
+            shrinkResources false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = '17'
     }
 }
 
