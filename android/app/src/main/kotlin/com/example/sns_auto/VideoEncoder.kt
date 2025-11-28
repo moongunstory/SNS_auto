@@ -6,13 +6,16 @@ import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
-import android.graphics.PorterDuff
-import android.graphics.PorterDuffXfermode
 import android.media.*
+import android.opengl.*
 import android.util.Log
+import android.view.Surface
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.nio.FloatBuffer
+import javax.microedition.khronos.egl.EGL10
 import kotlin.math.min
 
 /**
@@ -36,7 +39,7 @@ class VideoEncoder(private val context: Context) {
         private const val VIDEO_BITRATE = 8_000_000 // 8 Mbps
         private const val VIDEO_I_FRAME_INTERVAL = 1
 
-        // Audio configuration
+        // Audio configuration (defaults, will be overridden by decoder output)
         private const val AUDIO_SAMPLE_RATE = 44100
         private const val AUDIO_BITRATE = 128_000 // 128 kbps
         private const val AUDIO_CHANNELS = 2 // Stereo
@@ -197,6 +200,15 @@ class VideoEncoder(private val context: Context) {
     )
 
     /**
+     * Audio samples with format information
+     */
+    private data class AudioData(
+        val samples: ShortArray,
+        val sampleRate: Int,
+        val channelCount: Int
+    )
+
+    /**
      * Calculate total number of frames for the video
      *
      * With crossfade:
@@ -332,7 +344,7 @@ class VideoEncoder(private val context: Context) {
         var muxerStarted = false
 
         // Extract audio samples if BGM is available
-        val audioSamples = if (bgmPath != null && File(bgmPath).exists()) {
+        val audioData = if (bgmPath != null && File(bgmPath).exists()) {
             try {
                 Log.d(TAG, "Extracting audio from BGM: $bgmPath")
                 extractAudioSamplesFromFile(bgmPath, videoDurationUs)
@@ -345,15 +357,16 @@ class VideoEncoder(private val context: Context) {
         }
 
         // Create audio encoder if we have samples
-        val audioEncoder = if (audioSamples != null && audioSamples.isNotEmpty()) {
-            Log.d(TAG, "Creating audio encoder with ${audioSamples.size} samples")
+        val audioEncoder = if (audioData != null && audioData.samples.isNotEmpty()) {
+            Log.d(TAG, "Creating audio encoder with ${audioData.samples.size} samples at ${audioData.sampleRate}Hz, ${audioData.channelCount} channels")
             val audioFormat = MediaFormat.createAudioFormat(
                 AUDIO_MIME_TYPE,
-                AUDIO_SAMPLE_RATE,
-                AUDIO_CHANNELS
+                audioData.sampleRate,
+                audioData.channelCount
             ).apply {
                 setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
                 setInteger(MediaFormat.KEY_BIT_RATE, AUDIO_BITRATE)
+                setInteger(MediaFormat.KEY_PCM_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
             }
             MediaCodec.createEncoderByType(AUDIO_MIME_TYPE).apply {
                 configure(audioFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
@@ -364,13 +377,16 @@ class VideoEncoder(private val context: Context) {
             null
         }
 
+        // Setup EGL for rendering to the input surface
+        val eglHelper = EglHelper()
+        eglHelper.setup(inputSurface)
+
         try {
             var frameIndex = 0
-            val frameIntervalUs = 1_000_000L / VIDEO_FPS
             var videoInputDone = false
             var audioInputDone = audioEncoder == null // If no audio, mark as done
             var audioInputOffset = 0
-            val audioInputBufferSize = 2048
+            val audioInputBufferSize = 2048 // samples per buffer
 
             // Main encoding loop
             while (!videoInputDone || !audioInputDone ||
@@ -378,18 +394,22 @@ class VideoEncoder(private val context: Context) {
 
                 // Feed video frames
                 if (!videoInputDone && frameIndex < totalFrames) {
-                    val canvas = inputSurface.lockCanvas(null)
-                    val frame = generateFrame(bitmaps, frameIndex, framesPerImage, crossfadeFrames)
-                    canvas.drawBitmap(frame, 0f, 0f, null)
-                    frame.recycle()
-                    inputSurface.unlockCanvasAndPost(canvas)
+                    // Generate frame bitmap
+                    val frameBitmap = generateFrame(bitmaps, frameIndex, framesPerImage, crossfadeFrames)
+
+                    // Calculate presentation time for this frame
+                    val presentationTimeNs = (frameIndex * 1_000_000_000L) / VIDEO_FPS
+
+                    // Render to surface with EGL
+                    eglHelper.drawFrame(frameBitmap, presentationTimeNs)
+                    frameBitmap.recycle()
 
                     frameIndex++
 
                     if (frameIndex >= totalFrames) {
                         videoEncoder.signalEndOfInputStream()
                         videoInputDone = true
-                        Log.d(TAG, "All video frames submitted")
+                        Log.d(TAG, "All video frames submitted ($frameIndex frames)")
                     }
 
                     if (frameIndex % 30 == 0) {
@@ -398,21 +418,22 @@ class VideoEncoder(private val context: Context) {
                 }
 
                 // Feed audio samples
-                if (audioEncoder != null && audioSamples != null && !audioInputDone) {
+                if (audioEncoder != null && audioData != null && !audioInputDone) {
                     val inputBufferId = audioEncoder.dequeueInputBuffer(CODEC_TIMEOUT_US)
                     if (inputBufferId >= 0) {
                         val inputBuffer = audioEncoder.getInputBuffer(inputBufferId)!!
                         inputBuffer.clear()
 
-                        val samplesToWrite = min(audioInputBufferSize, audioSamples.size - audioInputOffset)
+                        val samplesToWrite = min(audioInputBufferSize, audioData.samples.size - audioInputOffset)
                         if (samplesToWrite > 0) {
-                            val byteBuffer = ByteBuffer.allocate(samplesToWrite * 2)
+                            // Write PCM samples to buffer
                             for (i in 0 until samplesToWrite) {
-                                byteBuffer.putShort(audioSamples[audioInputOffset + i])
+                                inputBuffer.putShort(audioData.samples[audioInputOffset + i])
                             }
-                            inputBuffer.put(byteBuffer.array())
+                            inputBuffer.flip()
 
-                            val presentationTimeUs = (audioInputOffset * 1_000_000L) / (AUDIO_SAMPLE_RATE * AUDIO_CHANNELS)
+                            // Calculate presentation time based on sample position
+                            val presentationTimeUs = (audioInputOffset * 1_000_000L) / (audioData.sampleRate * audioData.channelCount)
                             audioEncoder.queueInputBuffer(inputBufferId, 0, samplesToWrite * 2, presentationTimeUs, 0)
 
                             audioInputOffset += samplesToWrite
@@ -532,6 +553,7 @@ class VideoEncoder(private val context: Context) {
             Log.d(TAG, "Encoding finished successfully")
             return TrackIndices(videoTrackIndex, audioTrackIndex, muxerStarted)
         } finally {
+            eglHelper.release()
             videoEncoder.stop()
             videoEncoder.release()
             inputSurface.release()
@@ -644,7 +666,7 @@ class VideoEncoder(private val context: Context) {
      * Extracts PCM audio samples from the BGM file, trimming to video duration
      * and applying 1-second fade-out at the end
      */
-    private fun extractAudioSamplesFromFile(filePath: String, maxDurationUs: Long): ShortArray {
+    private fun extractAudioSamplesFromFile(filePath: String, maxDurationUs: Long): AudioData {
         val extractor = MediaExtractor()
 
         try {
@@ -657,6 +679,7 @@ class VideoEncoder(private val context: Context) {
                 val mime = format.getString(MediaFormat.KEY_MIME) ?: ""
                 if (mime.startsWith("audio/")) {
                     audioTrackIndex = i
+                    Log.d(TAG, "Found audio track: $mime")
                     break
                 }
             }
@@ -666,18 +689,24 @@ class VideoEncoder(private val context: Context) {
             }
 
             extractor.selectTrack(audioTrackIndex)
-            val format = extractor.getTrackFormat(audioTrackIndex)
+            val inputFormat = extractor.getTrackFormat(audioTrackIndex)
+            val mime = inputFormat.getString(MediaFormat.KEY_MIME)!!
+
+            Log.d(TAG, "Input audio format: $inputFormat")
 
             // Create decoder
-            val mime = format.getString(MediaFormat.KEY_MIME)!!
             val decoder = MediaCodec.createDecoderByType(mime)
-            decoder.configure(format, null, null, 0)
+            decoder.configure(inputFormat, null, null, 0)
             decoder.start()
 
             val samples = mutableListOf<Short>()
             var outputDone = false
             val bufferInfo = MediaCodec.BufferInfo()
             val fadeOutDurationUs = 1_000_000L // 1 second fade-out
+
+            // Read actual output format from decoder
+            var actualSampleRate = AUDIO_SAMPLE_RATE
+            var actualChannelCount = AUDIO_CHANNELS
 
             try {
                 while (!outputDone) {
@@ -697,38 +726,58 @@ class VideoEncoder(private val context: Context) {
 
                     // Get output
                     val outputBufferId = decoder.dequeueOutputBuffer(bufferInfo, CODEC_TIMEOUT_US)
-                    if (outputBufferId >= 0) {
-                        val outputBuffer = decoder.getOutputBuffer(outputBufferId)!!
 
-                        // Set position and limit based on bufferInfo
-                        outputBuffer.position(bufferInfo.offset)
-                        outputBuffer.limit(bufferInfo.offset + bufferInfo.size)
-
-                        // Convert ByteBuffer to ShortArray (16-bit PCM samples)
-                        val shortBuffer = outputBuffer.asShortBuffer()
-                        val chunk = ShortArray(shortBuffer.remaining())
-                        shortBuffer.get(chunk)
-
-                        // Apply fade-out if near end of video duration
-                        val currentTimeUs = bufferInfo.presentationTimeUs
-                        if (currentTimeUs + fadeOutDurationUs >= maxDurationUs) {
-                            applyFadeOut(chunk, currentTimeUs, maxDurationUs, fadeOutDurationUs)
+                    when (outputBufferId) {
+                        MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                            // Read actual audio format from decoder output
+                            val outputFormat = decoder.outputFormat
+                            actualSampleRate = outputFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                            actualChannelCount = outputFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+                            Log.d(TAG, "Decoder output format: $actualSampleRate Hz, $actualChannelCount channels")
                         }
-
-                        samples.addAll(chunk.toList())
-
-                        decoder.releaseOutputBuffer(outputBufferId, false)
-
-                        // Stop if we've reached video duration
-                        if (currentTimeUs >= maxDurationUs) {
-                            outputDone = true
+                        MediaCodec.INFO_TRY_AGAIN_LATER -> {
+                            // No output available yet
                         }
+                        else -> {
+                            if (outputBufferId >= 0) {
+                                val outputBuffer = decoder.getOutputBuffer(outputBufferId)!!
 
-                        if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
-                            outputDone = true
+                                // CRITICAL: Set position and limit based on bufferInfo
+                                outputBuffer.position(bufferInfo.offset)
+                                outputBuffer.limit(bufferInfo.offset + bufferInfo.size)
+
+                                // Convert ByteBuffer to ShortArray (16-bit PCM samples)
+                                val shortCount = bufferInfo.size / 2
+                                val shortBuffer = outputBuffer.asShortBuffer()
+                                val chunk = ShortArray(shortCount)
+                                shortBuffer.get(chunk)
+
+                                // Log first few samples for debugging (only once)
+                                if (samples.isEmpty() && chunk.isNotEmpty()) {
+                                    val samplePreview = chunk.take(8).joinToString(", ")
+                                    Log.d(TAG, "First PCM samples: [$samplePreview]")
+                                }
+
+                                // Apply fade-out if near end of video duration
+                                val currentTimeUs = bufferInfo.presentationTimeUs
+                                if (currentTimeUs + fadeOutDurationUs >= maxDurationUs) {
+                                    applyFadeOut(chunk, currentTimeUs, maxDurationUs, fadeOutDurationUs, actualSampleRate, actualChannelCount)
+                                }
+
+                                samples.addAll(chunk.toList())
+
+                                decoder.releaseOutputBuffer(outputBufferId, false)
+
+                                // Stop if we've reached video duration
+                                if (currentTimeUs >= maxDurationUs) {
+                                    outputDone = true
+                                }
+
+                                if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+                                    outputDone = true
+                                }
+                            }
                         }
-                    } else if (outputBufferId == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                        // Audio format changed (expected on first output)
                     }
                 }
             } finally {
@@ -736,8 +785,10 @@ class VideoEncoder(private val context: Context) {
                 decoder.release()
             }
 
-            Log.d(TAG, "Extracted ${samples.size} audio samples (${samples.size / (AUDIO_SAMPLE_RATE * AUDIO_CHANNELS)}s)")
-            return samples.toShortArray()
+            val durationSec = samples.size.toFloat() / (actualSampleRate * actualChannelCount)
+            Log.d(TAG, "Extracted ${samples.size} audio samples (${durationSec}s at ${actualSampleRate}Hz, ${actualChannelCount}ch)")
+
+            return AudioData(samples.toShortArray(), actualSampleRate, actualChannelCount)
         } finally {
             extractor.release()
         }
@@ -750,13 +801,15 @@ class VideoEncoder(private val context: Context) {
         samples: ShortArray,
         currentTimeUs: Long,
         maxDurationUs: Long,
-        fadeOutDurationUs: Long
+        fadeOutDurationUs: Long,
+        sampleRate: Int,
+        channelCount: Int
     ) {
         val fadeStartUs = maxDurationUs - fadeOutDurationUs
 
         for (i in samples.indices) {
             // Calculate sample timestamp
-            val sampleTimeUs = currentTimeUs + (i * 1_000_000L) / (AUDIO_SAMPLE_RATE * AUDIO_CHANNELS)
+            val sampleTimeUs = currentTimeUs + (i * 1_000_000L) / (sampleRate * channelCount)
 
             if (sampleTimeUs >= fadeStartUs) {
                 // Calculate fade multiplier (1.0 at start, 0.0 at end)
@@ -767,4 +820,265 @@ class VideoEncoder(private val context: Context) {
         }
     }
 
+    /**
+     * EGL helper for rendering bitmaps to MediaCodec input surface
+     */
+    private inner class EglHelper {
+        private var eglDisplay: EGLDisplay? = null
+        private var eglContext: EGLContext? = null
+        private var eglSurface: EGLSurface? = null
+
+        private var program = 0
+        private var textureId = 0
+        private var positionHandle = 0
+        private var texCoordHandle = 0
+        private var samplerHandle = 0
+
+        private val vertexBuffer: FloatBuffer
+        private val texCoordBuffer: FloatBuffer
+
+        // Vertex shader - simple passthrough
+        private val vertexShaderCode = """
+            attribute vec4 aPosition;
+            attribute vec2 aTexCoord;
+            varying vec2 vTexCoord;
+            void main() {
+                gl_Position = aPosition;
+                vTexCoord = aTexCoord;
+            }
+        """.trimIndent()
+
+        // Fragment shader - texture sampling
+        private val fragmentShaderCode = """
+            precision mediump float;
+            varying vec2 vTexCoord;
+            uniform sampler2D sTexture;
+            void main() {
+                gl_FragColor = texture2D(sTexture, vTexCoord);
+            }
+        """.trimIndent()
+
+        // Vertices for a full-screen quad
+        private val vertices = floatArrayOf(
+            -1.0f, -1.0f,  // bottom-left
+             1.0f, -1.0f,  // bottom-right
+            -1.0f,  1.0f,  // top-left
+             1.0f,  1.0f   // top-right
+        )
+
+        // Texture coordinates (flipped vertically for Android)
+        private val texCoords = floatArrayOf(
+            0.0f, 1.0f,  // bottom-left
+            1.0f, 1.0f,  // bottom-right
+            0.0f, 0.0f,  // top-left
+            1.0f, 0.0f   // top-right
+        )
+
+        init {
+            vertexBuffer = ByteBuffer.allocateDirect(vertices.size * 4)
+                .order(ByteOrder.nativeOrder())
+                .asFloatBuffer()
+                .put(vertices)
+            vertexBuffer.position(0)
+
+            texCoordBuffer = ByteBuffer.allocateDirect(texCoords.size * 4)
+                .order(ByteOrder.nativeOrder())
+                .asFloatBuffer()
+                .put(texCoords)
+            texCoordBuffer.position(0)
+        }
+
+        fun setup(surface: Surface) {
+            // Get EGL display
+            eglDisplay = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
+            if (eglDisplay == EGL14.EGL_NO_DISPLAY) {
+                throw RuntimeException("Unable to get EGL14 display")
+            }
+
+            // Initialize EGL
+            val version = IntArray(2)
+            if (!EGL14.eglInitialize(eglDisplay, version, 0, version, 1)) {
+                throw RuntimeException("Unable to initialize EGL14")
+            }
+
+            // Configure EGL
+            val attribList = intArrayOf(
+                EGL14.EGL_RED_SIZE, 8,
+                EGL14.EGL_GREEN_SIZE, 8,
+                EGL14.EGL_BLUE_SIZE, 8,
+                EGL14.EGL_ALPHA_SIZE, 8,
+                EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT,
+                EGL14.EGL_SURFACE_TYPE, EGL14.EGL_WINDOW_BIT,
+                EGL14.EGL_NONE
+            )
+
+            val configs = arrayOfNulls<EGLConfig>(1)
+            val numConfigs = IntArray(1)
+            if (!EGL14.eglChooseConfig(eglDisplay, attribList, 0, configs, 0, configs.size, numConfigs, 0)) {
+                throw RuntimeException("Unable to find RGB888+recordable ES2 EGL config")
+            }
+
+            // Create EGL context
+            val contextAttribs = intArrayOf(
+                EGL14.EGL_CONTEXT_CLIENT_VERSION, 2,
+                EGL14.EGL_NONE
+            )
+            eglContext = EGL14.eglCreateContext(
+                eglDisplay, configs[0], EGL14.EGL_NO_CONTEXT, contextAttribs, 0
+            )
+            checkEglError("eglCreateContext")
+
+            // Create window surface
+            val surfaceAttribs = intArrayOf(EGL14.EGL_NONE)
+            eglSurface = EGL14.eglCreateWindowSurface(
+                eglDisplay, configs[0], surface, surfaceAttribs, 0
+            )
+            checkEglError("eglCreateWindowSurface")
+
+            // Make current
+            if (!EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)) {
+                throw RuntimeException("eglMakeCurrent failed")
+            }
+
+            // Setup OpenGL
+            setupOpenGL()
+        }
+
+        private fun setupOpenGL() {
+            // Create shader program
+            val vertexShader = loadShader(GLES20.GL_VERTEX_SHADER, vertexShaderCode)
+            val fragmentShader = loadShader(GLES20.GL_FRAGMENT_SHADER, fragmentShaderCode)
+
+            program = GLES20.glCreateProgram()
+            GLES20.glAttachShader(program, vertexShader)
+            GLES20.glAttachShader(program, fragmentShader)
+            GLES20.glLinkProgram(program)
+
+            // Check link status
+            val linkStatus = IntArray(1)
+            GLES20.glGetProgramiv(program, GLES20.GL_LINK_STATUS, linkStatus, 0)
+            if (linkStatus[0] != GLES20.GL_TRUE) {
+                val error = GLES20.glGetProgramInfoLog(program)
+                GLES20.glDeleteProgram(program)
+                throw RuntimeException("Could not link program: $error")
+            }
+
+            // Get attribute/uniform locations
+            positionHandle = GLES20.glGetAttribLocation(program, "aPosition")
+            texCoordHandle = GLES20.glGetAttribLocation(program, "aTexCoord")
+            samplerHandle = GLES20.glGetUniformLocation(program, "sTexture")
+
+            // Generate texture
+            val textures = IntArray(1)
+            GLES20.glGenTextures(1, textures, 0)
+            textureId = textures[0]
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textureId)
+
+            // Set texture parameters
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+        }
+
+        private fun loadShader(type: Int, shaderCode: String): Int {
+            val shader = GLES20.glCreateShader(type)
+            GLES20.glShaderSource(shader, shaderCode)
+            GLES20.glCompileShader(shader)
+
+            // Check compile status
+            val compileStatus = IntArray(1)
+            GLES20.glGetShaderiv(shader, GLES20.GL_COMPILE_STATUS, compileStatus, 0)
+            if (compileStatus[0] != GLES20.GL_TRUE) {
+                val error = GLES20.glGetShaderInfoLog(shader)
+                GLES20.glDeleteShader(shader)
+                throw RuntimeException("Could not compile shader $type: $error")
+            }
+
+            return shader
+        }
+
+        fun drawFrame(bitmap: Bitmap, presentationTimeNs: Long) {
+            // Make current
+            EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
+
+            // Clear
+            GLES20.glClearColor(0.0f, 0.0f, 0.0f, 1.0f)
+            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+
+            // Use program
+            GLES20.glUseProgram(program)
+
+            // Upload bitmap to texture
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textureId)
+            GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bitmap, 0)
+
+            // Set vertex attributes
+            GLES20.glEnableVertexAttribArray(positionHandle)
+            GLES20.glVertexAttribPointer(positionHandle, 2, GLES20.GL_FLOAT, false, 0, vertexBuffer)
+
+            GLES20.glEnableVertexAttribArray(texCoordHandle)
+            GLES20.glVertexAttribPointer(texCoordHandle, 2, GLES20.GL_FLOAT, false, 0, texCoordBuffer)
+
+            // Set sampler uniform
+            GLES20.glUniform1i(samplerHandle, 0)
+
+            // Draw
+            GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+
+            // Disable attributes
+            GLES20.glDisableVertexAttribArray(positionHandle)
+            GLES20.glDisableVertexAttribArray(texCoordHandle)
+
+            // Set presentation time
+            EGLExt.eglPresentationTimeANDROID(eglDisplay, eglSurface, presentationTimeNs)
+
+            // Swap buffers
+            EGL14.eglSwapBuffers(eglDisplay, eglSurface)
+        }
+
+        fun release() {
+            if (eglDisplay != null && eglDisplay != EGL14.EGL_NO_DISPLAY) {
+                EGL14.eglMakeCurrent(
+                    eglDisplay,
+                    EGL14.EGL_NO_SURFACE,
+                    EGL14.EGL_NO_SURFACE,
+                    EGL14.EGL_NO_CONTEXT
+                )
+
+                if (eglSurface != null && eglSurface != EGL14.EGL_NO_SURFACE) {
+                    EGL14.eglDestroySurface(eglDisplay, eglSurface)
+                }
+
+                if (eglContext != null && eglContext != EGL14.EGL_NO_CONTEXT) {
+                    EGL14.eglDestroyContext(eglDisplay, eglContext)
+                }
+
+                EGL14.eglTerminate(eglDisplay)
+            }
+
+            eglDisplay = null
+            eglContext = null
+            eglSurface = null
+
+            // Delete OpenGL resources
+            if (textureId != 0) {
+                val textures = intArrayOf(textureId)
+                GLES20.glDeleteTextures(1, textures, 0)
+                textureId = 0
+            }
+
+            if (program != 0) {
+                GLES20.glDeleteProgram(program)
+                program = 0
+            }
+        }
+
+        private fun checkEglError(msg: String) {
+            val error = EGL14.eglGetError()
+            if (error != EGL14.EGL_SUCCESS) {
+                throw RuntimeException("$msg: EGL error: 0x${Integer.toHexString(error)}")
+            }
+        }
+    }
 }
