@@ -41,6 +41,19 @@ class TemplateModel {
           maxImages: 5,
         ),
       ),
+      TemplateModel(
+        id: 'before_after',
+        name: 'Before & After',
+        description: '인테리어 리모델링 전/후 비교',
+        config: TemplateConfig(
+          transitionType: TransitionType.cut,
+          imageDurationSeconds: 2.5,
+          transitionDurationSeconds: 0.0,
+          musicTrackName: '', // No BGM for this template
+          minImages: 2,
+          maxImages: 2,
+        ),
+      ),
     ];
   }
 }
