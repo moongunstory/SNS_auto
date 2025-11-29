@@ -54,7 +54,7 @@ class TemplateCard extends StatelessWidget {
           padding: const EdgeInsets.all(AppConstants.paddingMedium),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.start,
             children: [
               // Template icon (if selected)
               if (isSelected)
@@ -67,34 +67,30 @@ class TemplateCard extends StatelessWidget {
               if (isSelected) const SizedBox(height: AppConstants.paddingSmall),
 
               // Template name
-              Flexible(
-                child: Text(
-                  template.name,
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.bold,
-                        color: isSelected
-                            ? Theme.of(context).colorScheme.onPrimaryContainer
-                            : Theme.of(context).colorScheme.onSurface,
-                      ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
+              Text(
+                template.name,
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                      color: isSelected
+                          ? Theme.of(context).colorScheme.onPrimaryContainer
+                          : Theme.of(context).colorScheme.onSurface,
+                    ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
               ),
 
               const SizedBox(height: AppConstants.paddingSmall),
 
               // Template description
-              Flexible(
-                child: Text(
-                  template.description,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: isSelected
-                            ? Theme.of(context).colorScheme.onPrimaryContainer.withOpacity(0.8)
-                            : Theme.of(context).colorScheme.onSurface.withOpacity(0.7),
-                      ),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
+              Text(
+                template.description,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: isSelected
+                          ? Theme.of(context).colorScheme.onPrimaryContainer.withOpacity(0.8)
+                          : Theme.of(context).colorScheme.onSurface.withOpacity(0.7),
+                    ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
               ),
 
               const SizedBox(height: AppConstants.paddingSmall),

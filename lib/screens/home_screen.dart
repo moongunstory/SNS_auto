@@ -46,13 +46,13 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Photo selection section
-                    _buildPhotoSelectionSection(),
+                    // Template selection section (먼저 표시)
+                    _buildTemplateSelectionSection(),
 
                     const SizedBox(height: AppConstants.paddingLarge),
 
-                    // Template selection section
-                    _buildTemplateSelectionSection(),
+                    // Photo selection section (템플릿 선택 후에만 표시)
+                    if (_selectedTemplate != null) _buildPhotoSelectionSection(),
                   ],
                 ),
               ),
@@ -198,25 +198,19 @@ class _HomeScreenState extends State<HomeScreen> {
   // ============================================================================
 
   Future<void> _pickImages() async {
-    // Check if template is selected first
-    if (_selectedTemplate == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('먼저 템플릿을 선택해주세요'),
-          backgroundColor: Theme.of(context).colorScheme.error,
-        ),
-      );
-      return;
-    }
+    // 템플릿이 선택되지 않은 경우는 UI에서 이미 제어되므로 여기서는 확인 불필요
+    final config = _selectedTemplate!.config;
 
-    final result = await _mediaPickerService.pickImages();
+    // 템플릿의 최대 이미지 수를 전달하여 피커에서 제한
+    final result = await _mediaPickerService.pickImages(
+      maxImages: config.maxImages,
+    );
 
     if (!mounted) return;
 
     result.fold(
       onSuccess: (imagePaths) {
-        // Validate image count against template limits
-        final config = _selectedTemplate!.config;
+        // 추가 검증: 최소/최대 이미지 수 확인
         if (!config.isValidImageCount(imagePaths.length)) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
