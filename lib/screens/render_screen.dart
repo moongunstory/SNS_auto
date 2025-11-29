@@ -358,14 +358,15 @@ class _RenderScreenState extends State<RenderScreen> {
     });
   }
 
-  void _navigateToUploadScreen() {
+  void _navigateToUploadScreen() async {
     if (_videoPath == null) return;
 
     // Critical: Mute and pause video before navigating to prevent audio bleeding
     _videoController?.setVolume(0.0);
     _videoController?.pause();
 
-    Navigator.push(
+    // Navigate to upload screen and wait for return
+    await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => UploadScreen(
@@ -374,6 +375,12 @@ class _RenderScreenState extends State<RenderScreen> {
         ),
       ),
     );
+
+    // Restore volume when coming back from upload screen
+    if (mounted && _videoController != null) {
+      _videoController!.setVolume(1.0);
+      print('[RenderScreen] Volume restored after returning from upload screen');
+    }
   }
 }
 
