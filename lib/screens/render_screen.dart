@@ -45,6 +45,8 @@ class _RenderScreenState extends State<RenderScreen> {
 
   @override
   void dispose() {
+    _videoController?.setVolume(0.0);
+    _videoController?.pause();
     _videoController?.dispose();
     super.dispose();
   }
@@ -358,6 +360,10 @@ class _RenderScreenState extends State<RenderScreen> {
 
   void _navigateToUploadScreen() {
     if (_videoPath == null) return;
+
+    // Critical: Mute and pause video before navigating to prevent audio bleeding
+    _videoController?.setVolume(0.0);
+    _videoController?.pause();
 
     Navigator.push(
       context,
