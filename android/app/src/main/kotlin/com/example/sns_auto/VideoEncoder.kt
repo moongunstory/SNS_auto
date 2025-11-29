@@ -1112,43 +1112,506 @@ class VideoEncoder(private val context: Context) {
     }
 
     /**
-     * Render 4-tile intro template
+     * Encode 4-tile video with SFX timing
+     * Similar to encodeVideoAndAudio but with 4-tile frame generation and SFX playback
+     */
+    private fun encodeFourTileVideo(
+        muxer: MediaMuxer,
+        bitmaps: List<Bitmap>,
+        totalFrames: Int,
+        framesPerImage: Int,
+        grayscaleEndFrame: Int,
+        tilesEndFrame: Int,
+        colorEndFrame: Int,
+        videoDurationUs: Long,
+        bgmPath: String?,
+        sfxManager: SfxManager
+    ): TrackIndices {
+        Log.d(TAG, "Encoding 4-tile video...")
+
+        // Configure video format
+        val videoFormat = MediaFormat.createVideoFormat(VIDEO_MIME_TYPE, VIDEO_WIDTH, VIDEO_HEIGHT).apply {
+            setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+            setInteger(MediaFormat.KEY_BIT_RATE, VIDEO_BITRATE)
+            setInteger(MediaFormat.KEY_FRAME_RATE, VIDEO_FPS)
+            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, VIDEO_I_FRAME_INTERVAL)
+        }
+
+        // Create and configure video encoder
+        val videoEncoder = MediaCodec.createEncoderByType(VIDEO_MIME_TYPE)
+        videoEncoder.configure(videoFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+        val inputSurface = videoEncoder.createInputSurface()
+        videoEncoder.start()
+
+        var videoTrackIndex = -1
+        var audioTrackIndex = -1
+        var muxerStarted = false
+
+        // Extract audio samples if BGM is available
+        val audioData = if (bgmPath != null && File(bgmPath).exists()) {
+            try {
+                Log.d(TAG, "Extracting audio from BGM: $bgmPath")
+                extractAudioSamplesFromFile(bgmPath, videoDurationUs)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to extract audio: ${e.message}", e)
+                null
+            }
+        } else {
+            null
+        }
+
+        // Create audio encoder if we have samples
+        val audioEncoder = if (audioData != null && audioData.samples.isNotEmpty()) {
+            Log.d(TAG, "Creating audio encoder")
+            val audioFormat = MediaFormat.createAudioFormat(
+                AUDIO_MIME_TYPE,
+                audioData.sampleRate,
+                audioData.channelCount
+            ).apply {
+                setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
+                setInteger(MediaFormat.KEY_BIT_RATE, AUDIO_BITRATE)
+                setInteger(MediaFormat.KEY_PCM_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
+            }
+            MediaCodec.createEncoderByType(AUDIO_MIME_TYPE).apply {
+                configure(audioFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                start()
+            }
+        } else {
+            Log.d(TAG, "No audio encoder (no BGM)")
+            null
+        }
+
+        // Setup EGL for rendering
+        val eglHelper = EglHelper()
+        eglHelper.setup(inputSurface)
+
+        // Track SFX timing (to play each SFX only once)
+        val sfxPlayed = mutableSetOf<Int>()
+
+        try {
+            var frameIndex = 0
+            var videoInputDone = false
+            var audioInputDone = audioEncoder == null
+            var audioInputOffset = 0
+            val audioInputBufferSize = 2048
+
+            // Main encoding loop
+            while (!videoInputDone || !audioInputDone ||
+                videoTrackIndex < 0 || (audioEncoder != null && audioTrackIndex < 0)) {
+
+                // Feed video frames
+                if (!videoInputDone && frameIndex < totalFrames) {
+                    // Calculate which image and local frame within that image
+                    val imageIndex = frameIndex / framesPerImage
+                    val localFrame = frameIndex % framesPerImage
+
+                    // Check and play SFX at specific timing
+                    playSfxForFrame(localFrame, grayscaleEndFrame, tilesEndFrame, frameIndex, sfxPlayed, sfxManager)
+
+                    // Generate 4-tile frame
+                    val frameBitmap = generateFourTileFrame(
+                        bitmap = bitmaps[imageIndex],
+                        localFrame = localFrame,
+                        grayscaleEndFrame = grayscaleEndFrame,
+                        tilesEndFrame = tilesEndFrame,
+                        colorEndFrame = colorEndFrame,
+                        framesPerImage = framesPerImage
+                    )
+
+                    // Calculate presentation time
+                    val presentationTimeNs = (frameIndex * 1_000_000_000L) / VIDEO_FPS
+
+                    // Render to surface
+                    eglHelper.drawFrame(frameBitmap, presentationTimeNs)
+                    frameBitmap.recycle()
+
+                    frameIndex++
+
+                    if (frameIndex >= totalFrames) {
+                        videoEncoder.signalEndOfInputStream()
+                        videoInputDone = true
+                        Log.d(TAG, "All video frames submitted ($frameIndex frames)")
+                    }
+
+                    if (frameIndex % 30 == 0) {
+                        Log.d(TAG, "Submitted video frame $frameIndex/$totalFrames")
+                    }
+                }
+
+                // Feed audio samples (same as classic slideshow)
+                if (audioEncoder != null && audioData != null && !audioInputDone) {
+                    val inputBufferId = audioEncoder.dequeueInputBuffer(CODEC_TIMEOUT_US)
+                    if (inputBufferId >= 0) {
+                        val inputBuffer = audioEncoder.getInputBuffer(inputBufferId)!!
+                        inputBuffer.clear()
+
+                        val samplesToWrite = min(audioInputBufferSize, audioData.samples.size - audioInputOffset)
+                        if (samplesToWrite > 0) {
+                            for (i in 0 until samplesToWrite) {
+                                inputBuffer.putShort(audioData.samples[audioInputOffset + i])
+                            }
+                            inputBuffer.flip()
+
+                            val presentationTimeUs = (audioInputOffset * 1_000_000L) / (audioData.sampleRate * audioData.channelCount)
+                            audioEncoder.queueInputBuffer(inputBufferId, 0, samplesToWrite * 2, presentationTimeUs, 0)
+
+                            audioInputOffset += samplesToWrite
+                        } else {
+                            audioEncoder.queueInputBuffer(inputBufferId, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                            audioInputDone = true
+                            Log.d(TAG, "All audio samples submitted")
+                        }
+                    }
+                }
+
+                // Process video encoder output
+                val videoBufferInfo = MediaCodec.BufferInfo()
+                var videoOutputIndex = videoEncoder.dequeueOutputBuffer(videoBufferInfo, CODEC_TIMEOUT_US)
+
+                when (videoOutputIndex) {
+                    MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                        if (videoTrackIndex >= 0) {
+                            throw RuntimeException("Video format changed twice")
+                        }
+                        val outputFormat = videoEncoder.outputFormat
+                        videoTrackIndex = muxer.addTrack(outputFormat)
+                        Log.d(TAG, "Video track added (index: $videoTrackIndex)")
+
+                        if ((audioEncoder == null || audioTrackIndex >= 0) && !muxerStarted) {
+                            muxer.start()
+                            muxerStarted = true
+                            Log.d(TAG, "Muxer started")
+                        }
+                    }
+                    MediaCodec.INFO_TRY_AGAIN_LATER -> {
+                        // No output available yet
+                    }
+                    else -> {
+                        if (videoOutputIndex >= 0) {
+                            val encodedData = videoEncoder.getOutputBuffer(videoOutputIndex)
+                                ?: throw RuntimeException("Video encoder output buffer was null")
+
+                            if (videoBufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
+                                videoBufferInfo.size = 0
+                            }
+
+                            if (videoBufferInfo.size != 0 && muxerStarted) {
+                                encodedData.position(videoBufferInfo.offset)
+                                encodedData.limit(videoBufferInfo.offset + videoBufferInfo.size)
+                                muxer.writeSampleData(videoTrackIndex, encodedData, videoBufferInfo)
+                            }
+
+                            videoEncoder.releaseOutputBuffer(videoOutputIndex, false)
+
+                            if (videoBufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+                                Log.d(TAG, "Video encoding complete")
+                                if (audioEncoder == null) {
+                                    break
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Process audio encoder output (same as classic slideshow)
+                if (audioEncoder != null) {
+                    val audioBufferInfo = MediaCodec.BufferInfo()
+                    var audioOutputIndex = audioEncoder.dequeueOutputBuffer(audioBufferInfo, CODEC_TIMEOUT_US)
+
+                    when (audioOutputIndex) {
+                        MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                            if (audioTrackIndex >= 0) {
+                                throw RuntimeException("Audio format changed twice")
+                            }
+                            val outputFormat = audioEncoder.outputFormat
+                            audioTrackIndex = muxer.addTrack(outputFormat)
+                            Log.d(TAG, "Audio track added (index: $audioTrackIndex)")
+
+                            if (videoTrackIndex >= 0 && !muxerStarted) {
+                                muxer.start()
+                                muxerStarted = true
+                                Log.d(TAG, "Muxer started")
+                            }
+                        }
+                        MediaCodec.INFO_TRY_AGAIN_LATER -> {
+                            // No output available yet
+                        }
+                        else -> {
+                            if (audioOutputIndex >= 0) {
+                                val encodedData = audioEncoder.getOutputBuffer(audioOutputIndex)
+                                    ?: throw RuntimeException("Audio encoder output buffer was null")
+
+                                if (audioBufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
+                                    audioBufferInfo.size = 0
+                                }
+
+                                if (audioBufferInfo.size != 0 && muxerStarted) {
+                                    encodedData.position(audioBufferInfo.offset)
+                                    encodedData.limit(audioBufferInfo.offset + audioBufferInfo.size)
+                                    muxer.writeSampleData(audioTrackIndex, encodedData, audioBufferInfo)
+                                }
+
+                                audioEncoder.releaseOutputBuffer(audioOutputIndex, false)
+
+                                if (audioBufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+                                    Log.d(TAG, "Audio encoding complete")
+                                    if (videoInputDone && (videoBufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0)) {
+                                        break
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Log.d(TAG, "4-tile encoding finished successfully")
+            return TrackIndices(videoTrackIndex, audioTrackIndex, muxerStarted)
+        } finally {
+            eglHelper.release()
+            videoEncoder.stop()
+            videoEncoder.release()
+            inputSurface.release()
+            audioEncoder?.stop()
+            audioEncoder?.release()
+        }
+    }
+
+    /**
+     * Play SFX at specific frame timings
+     * - Tiles: 4 times during tile appearance phase
+     * - Color transition: 1 time when color transition starts
+     */
+    private fun playSfxForFrame(
+        localFrame: Int,
+        grayscaleEndFrame: Int,
+        tilesEndFrame: Int,
+        frameIndex: Int,
+        sfxPlayed: MutableSet<Int>,
+        sfxManager: SfxManager
+    ) {
+        // Calculate tile appearance frames (4 tiles evenly distributed)
+        val tilesPhaseFrames = tilesEndFrame - grayscaleEndFrame
+        val framesPerTile = tilesPhaseFrames / 4
+
+        // Tile 1-4 SFX timings
+        for (tileIndex in 0..3) {
+            val tileFrame = grayscaleEndFrame + (tileIndex * framesPerTile)
+            if (localFrame == tileFrame && !sfxPlayed.contains(frameIndex)) {
+                sfxManager.playHitNormal()
+                sfxPlayed.add(frameIndex)
+                Log.d(TAG, "SFX: Tile ${tileIndex + 1} at frame $frameIndex (local=$localFrame)")
+            }
+        }
+
+        // Color transition SFX (5th SFX)
+        if (localFrame == tilesEndFrame && !sfxPlayed.contains(frameIndex)) {
+            sfxManager.playHitEnhanced()
+            sfxPlayed.add(frameIndex)
+            Log.d(TAG, "SFX: Color transition at frame $frameIndex (local=$localFrame)")
+        }
+    }
+
+    /**
+     * Generate a single frame for 4-tile template
      *
-     * Timeline per image (based on 30fps):
-     * - t0 = 0.0s: Tile 2 (top-right) appears in grayscale
-     * - t1 = 0.2s: Tile 3 (bottom-left) appears in grayscale
-     * - t2 = 0.4s: Tile 1 (top-left) appears in grayscale
-     * - t3 = 0.6s: Tile 4 (bottom-right) appears in grayscale
-     * - t4 = 0.8s: All tiles transition grayscale->color + zoom effect
+     * @param bitmap Source bitmap (already scaled to VIDEO_WIDTH x VIDEO_HEIGHT)
+     * @param localFrame Frame number within this image (0-based)
+     * @param grayscaleEndFrame End of grayscale phase
+     * @param tilesEndFrame End of tiles phase (start of color transition)
+     * @param colorEndFrame End of color transition (start of zoom)
+     * @param framesPerImage Total frames for this image
+     * @return Rendered frame bitmap
+     */
+    private fun generateFourTileFrame(
+        bitmap: Bitmap,
+        localFrame: Int,
+        grayscaleEndFrame: Int,
+        tilesEndFrame: Int,
+        colorEndFrame: Int,
+        framesPerImage: Int
+    ): Bitmap {
+        // Determine timeline phase
+        val isGrayscalePhase = localFrame < grayscaleEndFrame
+        val isTilesPhase = localFrame >= grayscaleEndFrame && localFrame < tilesEndFrame
+        val isColorTransitionPhase = localFrame >= tilesEndFrame && localFrame < colorEndFrame
+        val isZoomPhase = localFrame >= colorEndFrame
+
+        // Calculate parameters based on phase
+        val grayscale: Float
+        val tilesVisible: Int  // 0-4
+        val zoomScale: Float
+
+        when {
+            isGrayscalePhase -> {
+                // Full grayscale, no tiles, no zoom
+                grayscale = 1.0f
+                tilesVisible = 0
+                zoomScale = 1.0f
+            }
+            isTilesPhase -> {
+                // Full grayscale, tiles appearing sequentially
+                val tilesPhaseFrames = tilesEndFrame - grayscaleEndFrame
+                val framesPerTile = tilesPhaseFrames / 4
+                val progress = localFrame - grayscaleEndFrame
+                tilesVisible = min((progress / framesPerTile) + 1, 4)
+                grayscale = 1.0f
+                zoomScale = 1.0f
+            }
+            isColorTransitionPhase -> {
+                // Grayscale -> Color transition, all 4 tiles visible
+                val transitionFrames = colorEndFrame - tilesEndFrame
+                val progress = (localFrame - tilesEndFrame).toFloat() / transitionFrames
+                grayscale = 1.0f - progress  // 1.0 -> 0.0
+                tilesVisible = 4
+                zoomScale = 1.0f
+            }
+            isZoomPhase -> {
+                // Full color, all tiles, zooming in
+                val zoomFrames = framesPerImage - colorEndFrame
+                val progress = (localFrame - colorEndFrame).toFloat() / zoomFrames
+                grayscale = 0.0f
+                tilesVisible = 4
+                zoomScale = 1.0f + (progress * 0.15f)  // 1.0 -> 1.15
+            }
+            else -> {
+                grayscale = 0.0f
+                tilesVisible = 4
+                zoomScale = 1.0f
+            }
+        }
+
+        // Create output bitmap
+        val output = Bitmap.createBitmap(VIDEO_WIDTH, VIDEO_HEIGHT, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(output)
+        canvas.drawColor(Color.BLACK)
+
+        // Apply zoom transform if needed
+        if (zoomScale > 1.0f) {
+            canvas.save()
+            canvas.scale(zoomScale, zoomScale, VIDEO_WIDTH / 2f, VIDEO_HEIGHT / 2f)
+        }
+
+        // Render based on tiles visible
+        if (tilesVisible == 0) {
+            // Just full grayscale image
+            val grayscaleBitmap = applyGrayscale(bitmap, grayscale)
+            canvas.drawBitmap(grayscaleBitmap, 0f, 0f, null)
+            grayscaleBitmap.recycle()
+        } else {
+            // Render 2x2 grid with tiles
+            val tileWidth = VIDEO_WIDTH / 2
+            val tileHeight = VIDEO_HEIGHT / 2
+
+            // Tile order: top-left, top-right, bottom-left, bottom-right
+            val tilePositions = arrayOf(
+                Pair(0, 0),                    // Tile 1: top-left
+                Pair(tileWidth, 0),            // Tile 2: top-right
+                Pair(0, tileHeight),           // Tile 3: bottom-left
+                Pair(tileWidth, tileHeight)    // Tile 4: bottom-right
+            )
+
+            for (i in 0 until tilesVisible) {
+                val (x, y) = tilePositions[i]
+
+                // Create tile bitmap (crop and scale)
+                val srcX = (i % 2) * (bitmap.width / 2)
+                val srcY = (i / 2) * (bitmap.height / 2)
+                val srcWidth = bitmap.width / 2
+                val srcHeight = bitmap.height / 2
+
+                val tileBitmap = Bitmap.createBitmap(bitmap, srcX, srcY, srcWidth, srcHeight)
+                val scaledTile = Bitmap.createScaledBitmap(tileBitmap, tileWidth, tileHeight, true)
+                tileBitmap.recycle()
+
+                // Apply grayscale if needed
+                val finalTile = if (grayscale > 0) {
+                    val gray = applyGrayscale(scaledTile, grayscale)
+                    scaledTile.recycle()
+                    gray
+                } else {
+                    scaledTile
+                }
+
+                canvas.drawBitmap(finalTile, x.toFloat(), y.toFloat(), null)
+                finalTile.recycle()
+            }
+        }
+
+        if (zoomScale > 1.0f) {
+            canvas.restore()
+        }
+
+        return output
+    }
+
+    /**
+     * Apply grayscale effect to bitmap
      *
-     * Total per image: ~2 seconds
+     * @param source Source bitmap
+     * @param amount Amount of grayscale (0.0 = color, 1.0 = full grayscale)
+     * @return New bitmap with grayscale applied
+     */
+    private fun applyGrayscale(source: Bitmap, amount: Float): Bitmap {
+        if (amount <= 0) {
+            return source.copy(Bitmap.Config.ARGB_8888, false)
+        }
+
+        val output = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(output)
+
+        val paint = Paint()
+        if (amount >= 1.0f) {
+            // Full grayscale
+            val colorMatrix = android.graphics.ColorMatrix().apply {
+                setSaturation(0f)
+            }
+            paint.colorFilter = android.graphics.ColorMatrixColorFilter(colorMatrix)
+        } else {
+            // Partial grayscale (interpolate)
+            val colorMatrix = android.graphics.ColorMatrix().apply {
+                setSaturation(1.0f - amount)
+            }
+            paint.colorFilter = android.graphics.ColorMatrixColorFilter(colorMatrix)
+        }
+
+        canvas.drawBitmap(source, 0f, 0f, paint)
+        return output
+    }
+
+    /**
+     * Render 4-tile intro template with full timeline
      *
-     * NOTE: This is a simplified implementation. Full spec requires:
-     * - SFX audio mixing (sfx_hit_1.mp3, sfx_click_2.mp3)
-     * - Grayscale shader with smooth transition
-     * - Two-stage zoom animation (fast then slow)
-     *
-     * Current implementation: Basic 4-tile reveal with fade-in
+     * Timeline per image (SCENE_DURATION = 2.5s):
+     * - 0.0 ~ 0.2 * SCENE_DURATION (0.0~0.5s): Grayscale fullscreen
+     * - 0.2 ~ 0.6 * SCENE_DURATION (0.5~1.5s): 4 tiles appear sequentially
+     *   - Each tile triggers SFX (4 times total)
+     * - 0.6 ~ 0.8 * SCENE_DURATION (1.5~2.0s): Grayscale→Color transition + SFX (5th)
+     * - 0.8 ~ 1.0 * SCENE_DURATION (2.0~2.5s): Color zoom in
      */
     private fun renderFourTileIntro(
         imagePaths: List<String>,
         outputPath: String,
         musicTrackName: String
     ): String {
-        Log.d(TAG, "Rendering 4-tile intro template")
-        Log.w(TAG, "NOTE: Using simplified 4-tile implementation")
-        Log.w(TAG, "Full spec with SFX/grayscale/zoom will be implemented in future update")
+        Log.d(TAG, "Rendering 4-tile intro template (FULL IMPLEMENTATION)")
 
         // Timeline constants
-        val beatIntervalSec = 0.2f
-        val perImageDurationSec = 2.0f  // Total time per image
-
-        // Frame calculations
-        val framesPerImage = (perImageDurationSec * VIDEO_FPS).toInt()
+        val sceneDurationSec = 2.5f  // Total time per image
+        val framesPerImage = (sceneDurationSec * VIDEO_FPS).toInt()  // 75 frames
         val totalFrames = imagePaths.size * framesPerImage
         val videoDurationUs = (totalFrames * 1_000_000L) / VIDEO_FPS
 
-        Log.d(TAG, "4-tile video: $totalFrames frames (${videoDurationUs / 1_000_000.0}s)")
+        Log.d(TAG, "4-tile video: $totalFrames frames (${videoDurationUs / 1_000_000.0}s), ${framesPerImage} frames/image")
+
+        // Timeline boundaries (as frame indices within each image)
+        val grayscaleEndFrame = (framesPerImage * 0.2f).toInt()  // ~15 frames
+        val tilesEndFrame = (framesPerImage * 0.6f).toInt()      // ~45 frames
+        val colorEndFrame = (framesPerImage * 0.8f).toInt()      // ~60 frames
+        // Zoom continues until framesPerImage (~75 frames)
+
+        Log.d(TAG, "Timeline: grayscale=0-$grayscaleEndFrame, tiles=$grayscaleEndFrame-$tilesEndFrame, " +
+                "color=$tilesEndFrame-$colorEndFrame, zoom=$colorEndFrame-$framesPerImage")
 
         // Check for BGM file
         val bgmPath = getBgmFilePath(musicTrackName)
@@ -1159,6 +1622,10 @@ class VideoEncoder(private val context: Context) {
             Log.d(TAG, "No BGM file found, rendering without audio")
         }
 
+        // Initialize SFX manager
+        val sfxManager = SfxManager(context)
+        sfxManager.initialize()
+
         // Load and prepare images
         val bitmaps = loadAndPrepareImages(imagePaths)
 
@@ -1166,22 +1633,18 @@ class VideoEncoder(private val context: Context) {
             // Setup MediaMuxer
             val muxer = MediaMuxer(outputPath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
 
-            // For now, use simplified rendering (similar to classic slideshow)
-            // TODO: Implement full 4-tile animation with:
-            // - 2x2 grid splitting
-            // - Timed tile reveals
-            // - Grayscale to color transition
-            // - Two-stage zoom
-            // - SFX audio mixing
-
-            val trackIndices = encodeVideoAndAudio(
+            // Encode with 4-tile specific logic
+            val trackIndices = encodeFourTileVideo(
                 muxer = muxer,
                 bitmaps = bitmaps,
                 totalFrames = totalFrames,
                 framesPerImage = framesPerImage,
-                crossfadeFrames = 0,  // No crossfade for 4-tile
+                grayscaleEndFrame = grayscaleEndFrame,
+                tilesEndFrame = tilesEndFrame,
+                colorEndFrame = colorEndFrame,
                 videoDurationUs = videoDurationUs,
-                bgmPath = bgmPath
+                bgmPath = bgmPath,
+                sfxManager = sfxManager
             )
 
             // Finalize muxer
@@ -1192,12 +1655,14 @@ class VideoEncoder(private val context: Context) {
 
             Log.d(TAG, "4-tile video encoding complete: $outputPath")
 
-            // Cleanup bitmaps
+            // Cleanup
+            sfxManager.release()
             bitmaps.forEach { it.recycle() }
 
             return outputPath
         } catch (e: Exception) {
             // Cleanup on error
+            sfxManager.release()
             bitmaps.forEach { it.recycle() }
             File(outputPath).delete()
             throw e
