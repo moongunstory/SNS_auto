@@ -59,6 +59,7 @@ class VideoEncoder(private val context: Context) {
 
         // Simple default overlay text style
         const val TEXT_SIZE_PX = 72f
+        const val TEXT_SIZE_BEFORE_AFTER_PX = TEXT_SIZE_PX * 2f  // 144f - doubled for Before & After template
         const val TEXT_STROKE_WIDTH = 4f
     }
 
@@ -316,7 +317,8 @@ class VideoEncoder(private val context: Context) {
         val assetName: String,
         val filePath: String,
         val startMs: Long,
-        val maxDurationMs: Long = Long.MAX_VALUE
+        val maxDurationMs: Long = Long.MAX_VALUE,
+        val speed: Float = 1.0f  // Playback speed multiplier (1.0 = normal, 1.3 = 30% faster)
     ) {
         fun validate(totalDurationMs: Long): Boolean {
             return startMs >= 0 && startMs < totalDurationMs
@@ -1739,11 +1741,11 @@ class VideoEncoder(private val context: Context) {
         // Timeline boundaries (as frame indices within each image)
         // MODIFIED: Start directly in 4-split mode (no fullscreen grayscale phase)
         val grayscaleEndFrame = 0  // Start with tiles immediately
-        val tilesEndFrame = (framesPerImage * 0.6f).toInt()      // ~45 frames
-        val colorEndFrame = (framesPerImage * 0.8f).toInt()      // ~60 frames
+        val tilesEndFrame = (framesPerImage * 0.4f).toInt()      // ~30 frames (1.5x faster: 45/1.5=30)
+        val colorEndFrame = (framesPerImage * 0.8f).toInt()      // ~60 frames (unchanged)
         // Zoom continues until framesPerImage (~75 frames)
 
-        Log.d(TAG, "Timeline: grayscale=0-$grayscaleEndFrame, tiles=$grayscaleEndFrame-$tilesEndFrame, " +
+        Log.d(TAG, "Timeline: grayscale=0-$grayscaleEndFrame, tiles=$grayscaleEndFrame-$tilesEndFrame (1.5x faster), " +
                 "color=$tilesEndFrame-$colorEndFrame, zoom=$colorEndFrame-$framesPerImage")
 
         // Check for BGM file
@@ -1906,7 +1908,8 @@ class VideoEncoder(private val context: Context) {
                 assetName = "before.mp3",
                 filePath = beforeMp3Path,
                 startMs = 0,
-                maxDurationMs = BEFORE_HOLD_MS
+                maxDurationMs = BEFORE_HOLD_MS,
+                speed = 1.3f  // Play before.mp3 at 1.3x speed (30% faster)
             ),
             AudioEvent(
                 assetName = "bell_ring.mp3",
@@ -2309,7 +2312,13 @@ class VideoEncoder(private val context: Context) {
         // Mix each audio event into the output buffer
         audioEvents.forEach { event ->
             try {
-                val audioData = extractAudioSamplesFromFile(event.filePath, videoDurationUs)
+                var audioData = extractAudioSamplesFromFile(event.filePath, videoDurationUs)
+
+                // Apply speed change if needed
+                if (event.speed != 1.0f) {
+                    audioData = resampleAudioForSpeed(audioData, event.speed)
+                    Log.d(TAG, "Resampled ${event.assetName} at ${event.speed}x speed: ${audioData.samples.size} samples")
+                }
 
                 // Calculate start sample position
                 val startSample = ((event.startMs / 1000.0) * audioData.sampleRate * audioData.channelCount).toInt()
@@ -2361,6 +2370,56 @@ class VideoEncoder(private val context: Context) {
                 mainBuffer[startSample + i] = mixed.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
             }
         }
+    }
+
+    /**
+     * Resample audio to achieve speed change
+     *
+     * @param audioData Original audio data
+     * @param speed Speed multiplier (1.0 = normal, 1.3 = 30% faster, 0.8 = 20% slower)
+     * @return Resampled audio data with adjusted length
+     */
+    private fun resampleAudioForSpeed(audioData: AudioData, speed: Float): AudioData {
+        if (speed == 1.0f) return audioData
+
+        val originalSamples = audioData.samples
+        val channelCount = audioData.channelCount
+
+        // Calculate new sample count (compressed for speed > 1.0, extended for speed < 1.0)
+        val newSampleCount = (originalSamples.size / speed).toInt()
+        val newSamples = ShortArray(newSampleCount)
+
+        // Resample using linear interpolation
+        for (i in 0 until newSampleCount step channelCount) {
+            // Calculate source position (floating point)
+            val srcPos = i * speed
+            val srcIndex = srcPos.toInt()
+
+            // Handle each channel separately
+            for (ch in 0 until channelCount) {
+                val targetIdx = i + ch
+                if (targetIdx >= newSampleCount) break
+
+                val srcIdx = srcIndex + ch
+                if (srcIdx >= originalSamples.size - channelCount) {
+                    // At the end, just copy the last sample
+                    newSamples[targetIdx] = if (srcIdx < originalSamples.size) {
+                        originalSamples[srcIdx]
+                    } else {
+                        originalSamples[originalSamples.size - channelCount + ch]
+                    }
+                } else {
+                    // Linear interpolation between current and next sample
+                    val frac = srcPos - srcIndex
+                    val sample1 = originalSamples[srcIdx].toInt()
+                    val sample2 = originalSamples[srcIdx + channelCount].toInt()
+                    val interpolated = (sample1 + (sample2 - sample1) * frac).toInt()
+                    newSamples[targetIdx] = interpolated.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+                }
+            }
+        }
+
+        return AudioData(newSamples, audioData.sampleRate, audioData.channelCount)
     }
 
     /**
@@ -2449,7 +2508,7 @@ class VideoEncoder(private val context: Context) {
     private fun drawText(canvas: Canvas, text: String, alpha: Float) {
         val paint = Paint().apply {
             color = Color.WHITE
-            textSize = TEXT_SIZE_PX
+            textSize = TEXT_SIZE_BEFORE_AFTER_PX  // Use doubled text size for Before & After template
             typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
             textAlign = Paint.Align.CENTER
             isAntiAlias = true
