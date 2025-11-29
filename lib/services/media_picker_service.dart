@@ -12,12 +12,19 @@ class MediaPickerService {
   /// Returns an error if:
   /// - User cancels the picker
   /// - No images are selected
-  /// - Too many images are selected (exceeds maxPhotosAllowed)
-  Future<Result<String, List<String>>> pickImages() async {
+  /// - Too many images are selected (exceeds maxPhotosAllowed or maxImages)
+  ///
+  /// [maxImages] - Optional maximum number of images to allow selection.
+  ///               If not provided, uses AppConstants.maxPhotosAllowed
+  Future<Result<String, List<String>>> pickImages({int? maxImages}) async {
     try {
+      // Determine the limit to use
+      final int limit = maxImages ?? AppConstants.maxPhotosAllowed;
+
       // Use pickMultiImage for selecting multiple images
       final List<XFile> images = await _picker.pickMultiImage(
         imageQuality: AppConstants.imageQuality,
+        limit: limit,
       );
 
       // Check if user cancelled or no images selected
@@ -25,10 +32,10 @@ class MediaPickerService {
         return Error('No images selected');
       }
 
-      // Check if too many images selected
-      if (images.length > AppConstants.maxPhotosAllowed) {
+      // Check if too many images selected (additional safety check)
+      if (images.length > limit) {
         return Error(
-          'Too many images selected. Maximum is ${AppConstants.maxPhotosAllowed}',
+          'Too many images selected. Maximum is $limit',
         );
       }
 
