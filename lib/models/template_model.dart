@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'package:flutter/services.dart';
+
 /// Represents a video template with its configuration
 class TemplateModel {
   final String id;
@@ -114,29 +117,104 @@ enum TransitionType {
 
 /// Represents a music track option
 class MusicTrack {
-  final String fileName;
-  final String displayName;
+  final String fileName;        // e.g., "bgm_default.mp3"
+  final String displayName;     // e.g., "기본 배경음악"
+  final String assetPath;       // e.g., "assets/audio/bgm/bgm_default.mp3"
   final bool isNoMusic;
 
   const MusicTrack({
     required this.fileName,
     required this.displayName,
+    required this.assetPath,
     this.isNoMusic = false,
   });
 
-  /// Get available BGM tracks (excludes SFX files)
-  static List<MusicTrack> getAvailableBgmTracks() {
-    return [
-      const MusicTrack(
-        fileName: '',
-        displayName: '음악 없음',
-        isNoMusic: true,
-      ),
-      const MusicTrack(
-        fileName: 'bgm_default.mp3',
-        displayName: '기본 배경음악',
-      ),
-      // Add more BGM tracks here as needed
-    ];
+  /// Get available BGM tracks by discovering files in assets/audio/bgm/
+  ///
+  /// This method dynamically discovers all .mp3 files in the BGM assets folder.
+  /// SFX files (which are in res/raw) are NOT included.
+  ///
+  /// Returns a list containing:
+  /// 1. "No music" option (empty fileName)
+  /// 2. All BGM tracks found in assets/audio/bgm/
+  static Future<List<MusicTrack>> getAvailableBgmTracks() async {
+    try {
+      // Import AssetManifest for dynamic asset discovery
+      final manifestContent = await rootBundle.loadString('AssetManifest.json');
+      final Map<String, dynamic> manifestMap = json.decode(manifestContent);
+
+      // Filter for BGM files only (assets/audio/bgm/*.mp3)
+      final bgmAssets = manifestMap.keys
+          .where((key) => key.startsWith('assets/audio/bgm/') && key.endsWith('.mp3'))
+          .toList();
+
+      // Sort alphabetically
+      bgmAssets.sort();
+
+      // Create MusicTrack objects
+      final tracks = <MusicTrack>[
+        // Always include "No music" option first
+        const MusicTrack(
+          fileName: '',
+          displayName: '음악 없음',
+          assetPath: '',
+          isNoMusic: true,
+        ),
+      ];
+
+      // Add discovered BGM tracks
+      for (final assetPath in bgmAssets) {
+        final fileName = assetPath.split('/').last;
+        final displayName = _getDisplayName(fileName);
+
+        tracks.add(MusicTrack(
+          fileName: fileName,
+          displayName: displayName,
+          assetPath: assetPath,
+        ));
+      }
+
+      return tracks;
+    } catch (e) {
+      print('[MusicTrack] Error loading BGM tracks: $e');
+      // Fallback to default track if discovery fails
+      return [
+        const MusicTrack(
+          fileName: '',
+          displayName: '음악 없음',
+          assetPath: '',
+          isNoMusic: true,
+        ),
+        const MusicTrack(
+          fileName: 'bgm_default.mp3',
+          displayName: '기본 배경음악',
+          assetPath: 'assets/audio/bgm/bgm_default.mp3',
+        ),
+      ];
+    }
+  }
+
+  /// Generate a display name from a filename
+  ///
+  /// Examples:
+  /// - "bgm_default.mp3" -> "기본 배경음악"
+  /// - "bgm_upbeat.mp3" -> "Bgm Upbeat"
+  static String _getDisplayName(String fileName) {
+    // Remove .mp3 extension
+    final nameWithoutExt = fileName.replaceAll('.mp3', '');
+
+    // Special case for default BGM
+    if (nameWithoutExt == 'bgm_default') {
+      return '기본 배경음악';
+    }
+
+    // Convert underscores to spaces and capitalize
+    final words = nameWithoutExt.split('_');
+    final capitalized = words.map((word) {
+      if (word.isEmpty) return '';
+      return word[0].toUpperCase() + word.substring(1);
+    }).join(' ');
+
+    return capitalized;
   }
 }

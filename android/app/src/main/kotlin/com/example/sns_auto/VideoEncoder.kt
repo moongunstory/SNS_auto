@@ -71,7 +71,7 @@ class VideoEncoder(private val context: Context) {
      * @param templateId Template ID to determine rendering mode
      * @param imageDurationMs Duration each image is displayed (milliseconds)
      * @param transitionDurationMs Duration of crossfade transition (milliseconds)
-     * @param musicTrackName Name of the music file to use (e.g., "bgm_default.mp3")
+     * @param musicTrackName Absolute file path to BGM audio file (provided by Flutter), or empty string for no music
      * @return Path to the created video file
      */
     fun renderSlideshow(
@@ -80,7 +80,7 @@ class VideoEncoder(private val context: Context) {
         templateId: String = "classic_slideshow",
         imageDurationMs: Int = 1500,
         transitionDurationMs: Int = 500,
-        musicTrackName: String = "bgm_default.mp3"
+        musicTrackName: String = ""
     ): String {
         Log.d(TAG, "Starting slideshow render:")
         Log.d(TAG, "  Template: $templateId")
@@ -165,69 +165,33 @@ class VideoEncoder(private val context: Context) {
     }
 
     /**
-     * Get the BGM file path from external storage
-     * Path: /Android/data/com.example.sns_auto/files/bgm/{musicTrackName}
+     * Get file path to BGM music track
      *
-     * If the file doesn't exist but exists in res/raw, it will be copied automatically.
+     * BGM files are now managed by Flutter and passed as absolute file paths.
+     * This method validates the file exists and returns the path.
      *
-     * @param musicTrackName Name of the music file (e.g., "bgm_default.mp3")
+     * @param bgmFilePath Absolute path to BGM file (provided by Flutter), or empty for no music
+     * @return Absolute path to BGM file, or null if no music or file not found
      */
-    private fun getBgmFilePath(musicTrackName: String): String? {
+    private fun getBgmFilePath(bgmFilePath: String): String? {
         return try {
-            val externalFilesDir = context.getExternalFilesDir(null)
-            if (externalFilesDir != null) {
-                val bgmDir = File(externalFilesDir, "bgm")
-                // Create directory if it doesn't exist
-                if (!bgmDir.exists()) {
-                    bgmDir.mkdirs()
-                    Log.d(TAG, "Created BGM directory: ${bgmDir.absolutePath}")
-                }
+            // Empty string means "no music"
+            if (bgmFilePath.isEmpty()) {
+                Log.d(TAG, "No BGM selected (empty path)")
+                return null
+            }
 
-                val bgmFile = File(bgmDir, musicTrackName)
-
-                // If BGM doesn't exist in external storage, try to copy from res/raw
-                if (!bgmFile.exists()) {
-                    Log.d(TAG, "BGM not found in external storage, checking res/raw...")
-                    copyBgmFromResources(bgmFile, musicTrackName)
-                }
-
+            val bgmFile = File(bgmFilePath)
+            if (bgmFile.exists()) {
+                Log.d(TAG, "BGM file found: ${bgmFile.absolutePath}")
                 bgmFile.absolutePath
             } else {
+                Log.w(TAG, "BGM file not found at path: $bgmFilePath")
                 null
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error getting BGM file path: ${e.message}")
+            Log.e(TAG, "Error validating BGM file path: ${e.message}")
             null
-        }
-    }
-
-    /**
-     * Copy BGM from app resources (res/raw) to external storage
-     *
-     * @param destinationFile Destination file to copy to
-     * @param musicTrackName Name of the music file (e.g., "bgm_default.mp3")
-     */
-    private fun copyBgmFromResources(destinationFile: File, musicTrackName: String) {
-        try {
-            // Extract resource name from musicTrackName (remove .mp3 extension)
-            val resourceName = musicTrackName.removeSuffix(".mp3")
-            val resourceId = context.resources.getIdentifier(resourceName, "raw", context.packageName)
-
-            if (resourceId != 0) {
-                Log.d(TAG, "Found BGM '$resourceName' in res/raw, copying to external storage...")
-
-                context.resources.openRawResource(resourceId).use { inputStream ->
-                    FileOutputStream(destinationFile).use { outputStream ->
-                        inputStream.copyTo(outputStream)
-                    }
-                }
-
-                Log.d(TAG, "BGM copied successfully: ${destinationFile.absolutePath}")
-            } else {
-                Log.d(TAG, "No BGM found in res/raw (R.raw.$resourceName not found)")
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to copy BGM from resources: ${e.message}", e)
         }
     }
 
@@ -1904,9 +1868,9 @@ class VideoEncoder(private val context: Context) {
                 assetName = "sfx_before.mp3",
                 filePath = beforeMp3Path,
                 startMs = 0,
-                maxDurationMs = BEFORE_HOLD_MS,
-                speed = 1.3f,  // Play before at 1.3x tempo (30% faster)
-                pitchCorrection = true  // Preserve original pitch despite speed change
+                maxDurationMs = BEFORE_HOLD_MS
+                // speed = 1.0f (default), pitchCorrection = false (default)
+                // Play before voice file as-is with no processing
             ),
             AudioEvent(
                 assetName = "sfx_after.mp3",
