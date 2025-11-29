@@ -50,6 +50,16 @@ class VideoEncoder(private val context: Context) {
 
         // Timeouts
         private const val CODEC_TIMEOUT_US = 10000L // 10ms
+
+        // Before & After template constants
+        const val BEFORE_HOLD_MS = 2500L
+        const val AFTER_HOLD_MS = 2500L
+        const val TEXT_FLIP_MS = 200L
+        const val AFTER_ZOOM_SCALE = 1.05f
+
+        // Simple default overlay text style
+        const val TEXT_SIZE_PX = 72f
+        const val TEXT_STROKE_WIDTH = 4f
     }
 
     /**
@@ -1696,18 +1706,6 @@ class VideoEncoder(private val context: Context) {
     // ============================================================================
     // BEFORE & AFTER TEMPLATE
     // ============================================================================
-
-    companion object BeforeAfterConstants {
-        // Tunable constants for Before & After template
-        const val BEFORE_HOLD_MS = 2500L       // 2.5 seconds
-        const val AFTER_HOLD_MS = 2500L        // 2.5 seconds
-        const val TEXT_FLIP_MS = 200L          // 0.2 seconds
-        const val AFTER_ZOOM_SCALE = 1.05f     // 5% zoom-in
-
-        // Text styling
-        const val TEXT_SIZE_PX = 120f
-        const val TEXT_STROKE_WIDTH = 8f
-    }
 
     /**
      * Render Before & After template
