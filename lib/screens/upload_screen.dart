@@ -38,6 +38,7 @@ class _UploadScreenState extends State<UploadScreen> {
 
   // Form controllers
   final TextEditingController _captionController = TextEditingController();
+  final TextEditingController _commonTagsController = TextEditingController();
   final TextEditingController _instagramTagsController = TextEditingController();
   final TextEditingController _youtubeTagsController = TextEditingController();
   final TextEditingController _tiktokTagsController = TextEditingController();
@@ -55,6 +56,7 @@ class _UploadScreenState extends State<UploadScreen> {
   @override
   void dispose() {
     _captionController.dispose();
+    _commonTagsController.dispose();
     _instagramTagsController.dispose();
     _youtubeTagsController.dispose();
     _tiktokTagsController.dispose();
@@ -77,11 +79,6 @@ class _UploadScreenState extends State<UploadScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Video preview thumbnail
-                    _buildVideoPreview(),
-
-                    const SizedBox(height: AppConstants.paddingLarge),
-
                     // Platform selection
                     _buildPlatformSelection(),
 
@@ -89,6 +86,11 @@ class _UploadScreenState extends State<UploadScreen> {
 
                     // Caption input
                     _buildCaptionInput(),
+
+                    const SizedBox(height: AppConstants.paddingLarge),
+
+                    // Common tags (all platforms)
+                    _buildCommonTags(),
 
                     const SizedBox(height: AppConstants.paddingLarge),
 
@@ -109,51 +111,6 @@ class _UploadScreenState extends State<UploadScreen> {
           ],
         ),
       ),
-    );
-  }
-
-  Widget _buildVideoPreview() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          AppConstants.sectionVideoPreview,
-          style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                fontWeight: FontWeight.bold,
-              ),
-        ),
-
-        const SizedBox(height: AppConstants.paddingMedium),
-
-        Container(
-          height: 200,
-          width: double.infinity,
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(AppConstants.borderRadiusMedium),
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(AppConstants.borderRadiusMedium),
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                // Placeholder for video thumbnail
-                Icon(
-                  Icons.video_library,
-                  size: 64,
-                  color: Theme.of(context).colorScheme.onSurface.withOpacity(0.3),
-                ),
-                // Play icon overlay
-                Icon(
-                  Icons.play_circle_outline,
-                  size: 80,
-                  color: Theme.of(context).colorScheme.primary,
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
     );
   }
 
@@ -222,6 +179,33 @@ class _UploadScreenState extends State<UploadScreen> {
             hintText: AppConstants.hintCaptionInput,
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(AppConstants.borderRadiusMedium),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCommonTags() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          AppConstants.sectionCommonTags,
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+        ),
+
+        const SizedBox(height: AppConstants.paddingSmall),
+
+        TextField(
+          controller: _commonTagsController,
+          decoration: InputDecoration(
+            labelText: AppConstants.labelCommonTags,
+            hintText: AppConstants.hintCommonTags,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(AppConstants.borderRadiusSmall),
             ),
           ),
         ),
@@ -396,9 +380,15 @@ class _UploadScreenState extends State<UploadScreen> {
     final caption = _captionController.text.trim();
 
     // Parse tags
+    final commonTags = _parseHashtags(_commonTagsController.text);
     final instagramTags = _parseHashtags(_instagramTagsController.text);
     final youtubeTags = _parseTags(_youtubeTagsController.text);
     final tiktokTags = _parseHashtags(_tiktokTagsController.text);
+
+    // Merge common tags with platform-specific tags
+    final mergedInstagramTags = [...commonTags, ...instagramTags];
+    final mergedYoutubeTags = [...commonTags, ...youtubeTags];
+    final mergedTiktokTags = [...commonTags, ...tiktokTags];
 
     // Initialize upload states
     if (_uploadFacebookPage) {
@@ -437,15 +427,15 @@ class _UploadScreenState extends State<UploadScreen> {
     }
 
     if (_uploadInstagram) {
-      await _uploadToInstagram(caption, instagramTags);
+      await _uploadToInstagram(caption, mergedInstagramTags);
     }
 
     if (_uploadYouTube) {
-      await _uploadToYouTube(caption, youtubeTags);
+      await _uploadToYouTube(caption, mergedYoutubeTags);
     }
 
     if (_uploadTikTok) {
-      await _uploadToTikTok(caption, tiktokTags);
+      await _uploadToTikTok(caption, mergedTiktokTags);
     }
 
     setState(() {

@@ -146,6 +146,7 @@ class AppConstants {
   static const String sectionVideoPreview = '영상 미리보기';
   static const String sectionUploadTo = '업로드할 플랫폼';
   static const String sectionCaption = '캡션';
+  static const String sectionCommonTags = '전체 태그 (모든 플랫폼 공통)';
   static const String sectionPlatformTags = '플랫폼별 태그';
   static const String sectionUploadStatus = '업로드 상태';
 
@@ -163,11 +164,13 @@ class AppConstants {
   static const String platformTikTok = 'TikTok';
 
   // Tag input labels
+  static const String labelCommonTags = '공통 태그';
   static const String labelInstagramHashtags = 'Instagram 해시태그';
   static const String labelYouTubeTags = 'YouTube 태그';
   static const String labelTikTokHashtags = 'TikTok 해시태그';
 
   // Tag input hints
+  static const String hintCommonTags = '#태그1 #태그2 #태그3';
   static const String hintInstagramTags = '#태그1 #태그2 #태그3';
   static const String hintYouTubeTags = '태그1, 태그2, 태그3';
   static const String hintTikTokTags = '#태그1 #태그2 #태그3';
