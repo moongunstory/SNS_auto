@@ -25,6 +25,7 @@ class MainActivity : FlutterActivity() {
                         // Extract arguments
                         val imagePaths = call.argument<List<String>>("imagePaths")
                         val outputPath = call.argument<String>("outputPath")
+                        val templateId = call.argument<String>("templateId") ?: "classic_slideshow"
                         val imageDurationMs = call.argument<Int>("imageDurationMs") ?: 1500
                         val transitionDurationMs = call.argument<Int>("transitionDurationMs") ?: 500
                         val musicTrackName = call.argument<String>("musicTrackName") ?: "bgm_default.mp3"
@@ -46,6 +47,7 @@ class MainActivity : FlutterActivity() {
                                 val finalOutputPath = encoder.renderSlideshow(
                                     imagePaths = imagePaths,
                                     outputPath = outputPath,
+                                    templateId = templateId,
                                     imageDurationMs = imageDurationMs,
                                     transitionDurationMs = transitionDurationMs,
                                     musicTrackName = musicTrackName
