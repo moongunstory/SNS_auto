@@ -105,9 +105,6 @@ class TemplateConfig {
 
 /// Types of transitions between images
 enum TransitionType {
-  fade,
-  dissolve,
-  slide,
-  zoom,
-  cut,
+  fade,  // Used by classic slideshow
+  cut,   // Used by four-tile and before/after
 }
