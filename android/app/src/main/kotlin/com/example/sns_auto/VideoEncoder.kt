@@ -1113,7 +1113,7 @@ class VideoEncoder(private val context: Context) {
 
     /**
      * Encode 4-tile video with SFX timing
-     * Similar to encodeVideoAndAudio but with 4-tile frame generation and SFX playback
+     * Similar to encodeVideoAndAudio but with 4-tile frame generation and offline audio mixing
      */
     private fun encodeFourTileVideo(
         muxer: MediaMuxer,
@@ -1125,7 +1125,7 @@ class VideoEncoder(private val context: Context) {
         colorEndFrame: Int,
         videoDurationUs: Long,
         bgmPath: String?,
-        sfxManager: SfxManager
+        sfxEvents: List<AudioMixer.SfxEvent>
     ): TrackIndices {
         Log.d(TAG, "Encoding 4-tile video...")
 
@@ -1147,13 +1147,15 @@ class VideoEncoder(private val context: Context) {
         var audioTrackIndex = -1
         var muxerStarted = false
 
-        // Extract audio samples if BGM is available
+        // Mix BGM with SFX offline using AudioMixer
         val audioData = if (bgmPath != null && File(bgmPath).exists()) {
             try {
-                Log.d(TAG, "Extracting audio from BGM: $bgmPath")
-                extractAudioSamplesFromFile(bgmPath, videoDurationUs)
+                Log.d(TAG, "Mixing audio: BGM=$bgmPath with ${sfxEvents.size} SFX events")
+                val mixer = AudioMixer(context)
+                val mixed = mixer.mixAudio(bgmPath, sfxEvents, videoDurationUs)
+                AudioData(mixed.samples, mixed.sampleRate, mixed.channelCount)
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to extract audio: ${e.message}", e)
+                Log.e(TAG, "Failed to mix audio: ${e.message}", e)
                 null
             }
         } else {
@@ -1185,9 +1187,6 @@ class VideoEncoder(private val context: Context) {
         val eglHelper = EglHelper()
         eglHelper.setup(inputSurface)
 
-        // Track SFX timing (to play each SFX only once)
-        val sfxPlayed = mutableSetOf<Int>()
-
         try {
             var frameIndex = 0
             var videoInputDone = false
@@ -1205,10 +1204,7 @@ class VideoEncoder(private val context: Context) {
                     val imageIndex = frameIndex / framesPerImage
                     val localFrame = frameIndex % framesPerImage
 
-                    // Check and play SFX at specific timing
-                    playSfxForFrame(localFrame, grayscaleEndFrame, tilesEndFrame, frameIndex, sfxPlayed, sfxManager)
-
-                    // Generate 4-tile frame
+                    // Generate 4-tile frame (no SFX playback - audio is mixed offline)
                     val frameBitmap = generateFourTileFrame(
                         bitmap = bitmaps[imageIndex],
                         localFrame = localFrame,
@@ -1378,38 +1374,38 @@ class VideoEncoder(private val context: Context) {
     }
 
     /**
-     * Play SFX at specific frame timings
-     * - Tiles: 4 times during tile appearance phase
-     * - Color transition: 1 time when color transition starts
+     * Calculate SFX event timings for 4-tile template
+     * - Tiles: 4 times during tile appearance phase (sfx_hit)
+     * - Color transition: 1 time when color transition starts (sfx_hit)
      */
-    private fun playSfxForFrame(
-        localFrame: Int,
+    private fun calculateSfxEvents(
+        imagePaths: List<String>,
+        framesPerImage: Int,
         grayscaleEndFrame: Int,
-        tilesEndFrame: Int,
-        frameIndex: Int,
-        sfxPlayed: MutableSet<Int>,
-        sfxManager: SfxManager
-    ) {
-        // Calculate tile appearance frames (4 tiles evenly distributed)
+        tilesEndFrame: Int
+    ): List<AudioMixer.SfxEvent> {
+        val events = mutableListOf<AudioMixer.SfxEvent>()
         val tilesPhaseFrames = tilesEndFrame - grayscaleEndFrame
         val framesPerTile = tilesPhaseFrames / 4
 
-        // Tile 1-4 SFX timings
-        for (tileIndex in 0..3) {
-            val tileFrame = grayscaleEndFrame + (tileIndex * framesPerTile)
-            if (localFrame == tileFrame && !sfxPlayed.contains(frameIndex)) {
-                sfxManager.playHitNormal()
-                sfxPlayed.add(frameIndex)
-                Log.d(TAG, "SFX: Tile ${tileIndex + 1} at frame $frameIndex (local=$localFrame)")
+        for (imageIndex in imagePaths.indices) {
+            val imageStartTimeMs = (imageIndex * framesPerImage * 1000L) / VIDEO_FPS
+
+            // Tile 1-4 SFX timings
+            for (tileIndex in 0..3) {
+                val tileFrame = grayscaleEndFrame + (tileIndex * framesPerTile)
+                val tileTimeMs = imageStartTimeMs + (tileFrame * 1000L) / VIDEO_FPS
+                events.add(AudioMixer.SfxEvent("sfx_hit", tileTimeMs))
+                Log.d(TAG, "SFX scheduled: Tile ${tileIndex + 1} at ${tileTimeMs}ms")
             }
+
+            // Color transition SFX (5th SFX)
+            val colorTransitionTimeMs = imageStartTimeMs + (tilesEndFrame * 1000L) / VIDEO_FPS
+            events.add(AudioMixer.SfxEvent("sfx_hit", colorTransitionTimeMs))
+            Log.d(TAG, "SFX scheduled: Color transition at ${colorTransitionTimeMs}ms")
         }
 
-        // Color transition SFX (5th SFX)
-        if (localFrame == tilesEndFrame && !sfxPlayed.contains(frameIndex)) {
-            sfxManager.playHitEnhanced()
-            sfxPlayed.add(frameIndex)
-            Log.d(TAG, "SFX: Color transition at frame $frameIndex (local=$localFrame)")
-        }
+        return events
     }
 
     /**
@@ -1418,8 +1414,8 @@ class VideoEncoder(private val context: Context) {
      * @param bitmap Source bitmap (already scaled to VIDEO_WIDTH x VIDEO_HEIGHT)
      * @param localFrame Frame number within this image (0-based)
      * @param grayscaleEndFrame End of grayscale phase
-     * @param tilesEndFrame End of tiles phase (start of color transition)
-     * @param colorEndFrame End of color transition (start of zoom)
+     * @param tilesEndFrame End of tiles phase (INSTANT color transition + start of punch zoom)
+     * @param colorEndFrame End of color transition (unused, kept for compatibility)
      * @param framesPerImage Total frames for this image
      * @return Rendered frame bitmap
      */
@@ -1434,8 +1430,7 @@ class VideoEncoder(private val context: Context) {
         // Determine timeline phase
         val isGrayscalePhase = localFrame < grayscaleEndFrame
         val isTilesPhase = localFrame >= grayscaleEndFrame && localFrame < tilesEndFrame
-        val isColorTransitionPhase = localFrame >= tilesEndFrame && localFrame < colorEndFrame
-        val isZoomPhase = localFrame >= colorEndFrame
+        val isPunchZoomPhase = localFrame >= tilesEndFrame
 
         // Calculate parameters based on phase
         val grayscale: Float
@@ -1458,31 +1453,34 @@ class VideoEncoder(private val context: Context) {
                 grayscale = 1.0f
                 zoomScale = 1.0f
             }
-            isColorTransitionPhase -> {
-                // Grayscale -> Color transition, all 4 tiles visible
-                val transitionFrames = colorEndFrame - tilesEndFrame
-                val progress = (localFrame - tilesEndFrame).toFloat() / transitionFrames
-                grayscale = 1.0f - progress  // 1.0 -> 0.0
-                tilesVisible = 4
-                zoomScale = 1.0f
-            }
-            isZoomPhase -> {
-                // Full color, all tiles, zooming in with two-phase speed
-                val zoomFrames = framesPerImage - colorEndFrame
-                val progress = (localFrame - colorEndFrame).toFloat() / zoomFrames
-                grayscale = 0.0f
+            isPunchZoomPhase -> {
+                // INSTANT color change + PUNCH zoom
+                // Color: step change at tilesEndFrame (no interpolation)
+                grayscale = 0.0f  // Full color instantly
                 tilesVisible = 4
 
-                // Two-phase zoom: fast 0.1s + slow 0.1s (total ~0.2s zoom)
-                // Assuming zoom duration is ~0.5s (15 frames at 30fps)
-                // Fast phase: 0.0 - 0.5 → zoom 0-70% of total (1.0 -> 1.25)
-                // Slow phase: 0.5 - 1.0 → zoom remaining 30% (1.25 -> 1.30)
-                zoomScale = if (progress < 0.5f) {
-                    // Fast phase: 70% of zoom in first half
-                    1.0f + (progress * 2.0f * 0.7f * 0.30f)  // 1.0 -> 1.21
-                } else {
-                    // Slow phase: remaining 30% of zoom in second half
-                    1.21f + ((progress - 0.5f) * 2.0f * 0.3f * 0.30f)  // 1.21 -> 1.30
+                // Punch zoom with overshoot and settle
+                // localT = time in seconds since the hit moment (tilesEndFrame)
+                val localT = (localFrame - tilesEndFrame).toFloat() / VIDEO_FPS
+
+                // Option B: Overshoot and settle
+                // 0.0 - 0.08s: 1.0 → 1.35 (overshoot, very fast)
+                // 0.08 - 0.20s: 1.35 → 1.30 (settle, slow)
+                // 0.20s+: stay at 1.30
+                zoomScale = when {
+                    localT < 0.08f -> {
+                        // Fast overshoot phase
+                        val p = localT / 0.08f
+                        1.0f + 0.35f * p  // 1.0 → 1.35
+                    }
+                    localT < 0.20f -> {
+                        // Slow settle phase
+                        val p = (localT - 0.08f) / 0.12f
+                        1.35f - 0.05f * p  // 1.35 → 1.30
+                    }
+                    else -> {
+                        1.30f  // Final scale
+                    }
                 }
             }
             else -> {
@@ -1635,9 +1633,9 @@ class VideoEncoder(private val context: Context) {
             Log.d(TAG, "No BGM file found, rendering without audio")
         }
 
-        // Initialize SFX manager
-        val sfxManager = SfxManager(context)
-        sfxManager.initialize()
+        // Calculate SFX event timings for offline mixing
+        val sfxEvents = calculateSfxEvents(imagePaths, framesPerImage, grayscaleEndFrame, tilesEndFrame)
+        Log.d(TAG, "Calculated ${sfxEvents.size} SFX events for offline mixing")
 
         // Load and prepare images
         val bitmaps = loadAndPrepareImages(imagePaths)
@@ -1657,7 +1655,7 @@ class VideoEncoder(private val context: Context) {
                 colorEndFrame = colorEndFrame,
                 videoDurationUs = videoDurationUs,
                 bgmPath = bgmPath,
-                sfxManager = sfxManager
+                sfxEvents = sfxEvents
             )
 
             // Finalize muxer
@@ -1669,13 +1667,11 @@ class VideoEncoder(private val context: Context) {
             Log.d(TAG, "4-tile video encoding complete: $outputPath")
 
             // Cleanup
-            sfxManager.release()
             bitmaps.forEach { it.recycle() }
 
             return outputPath
         } catch (e: Exception) {
             // Cleanup on error
-            sfxManager.release()
             bitmaps.forEach { it.recycle() }
             File(outputPath).delete()
             throw e
