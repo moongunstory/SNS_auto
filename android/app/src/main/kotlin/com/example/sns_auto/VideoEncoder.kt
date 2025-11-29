@@ -1467,12 +1467,23 @@ class VideoEncoder(private val context: Context) {
                 zoomScale = 1.0f
             }
             isZoomPhase -> {
-                // Full color, all tiles, zooming in
+                // Full color, all tiles, zooming in with two-phase speed
                 val zoomFrames = framesPerImage - colorEndFrame
                 val progress = (localFrame - colorEndFrame).toFloat() / zoomFrames
                 grayscale = 0.0f
                 tilesVisible = 4
-                zoomScale = 1.0f + (progress * 0.15f)  // 1.0 -> 1.15
+
+                // Two-phase zoom: fast 0.1s + slow 0.1s (total ~0.2s zoom)
+                // Assuming zoom duration is ~0.5s (15 frames at 30fps)
+                // Fast phase: 0.0 - 0.5 → zoom 0-70% of total (1.0 -> 1.25)
+                // Slow phase: 0.5 - 1.0 → zoom remaining 30% (1.25 -> 1.30)
+                zoomScale = if (progress < 0.5f) {
+                    // Fast phase: 70% of zoom in first half
+                    1.0f + (progress * 2.0f * 0.7f * 0.30f)  // 1.0 -> 1.21
+                } else {
+                    // Slow phase: remaining 30% of zoom in second half
+                    1.21f + ((progress - 0.5f) * 2.0f * 0.3f * 0.30f)  // 1.21 -> 1.30
+                }
             }
             else -> {
                 grayscale = 0.0f
@@ -1503,20 +1514,21 @@ class VideoEncoder(private val context: Context) {
             val tileWidth = VIDEO_WIDTH / 2
             val tileHeight = VIDEO_HEIGHT / 2
 
-            // Tile order: top-left, top-right, bottom-left, bottom-right
-            val tilePositions = arrayOf(
-                Pair(0, 0),                    // Tile 1: top-left
-                Pair(tileWidth, 0),            // Tile 2: top-right
-                Pair(0, tileHeight),           // Tile 3: bottom-left
-                Pair(tileWidth, tileHeight)    // Tile 4: bottom-right
+            // MODIFIED: Tile reveal order changed to top-right, bottom-left, top-left, bottom-right
+            // Each entry: (screen_x, screen_y, src_x_index, src_y_index)
+            val tileConfigs = arrayOf(
+                TileConfig(tileWidth, 0, 1, 0),            // Tile 1: top-right
+                TileConfig(0, tileHeight, 0, 1),           // Tile 2: bottom-left
+                TileConfig(0, 0, 0, 0),                    // Tile 3: top-left
+                TileConfig(tileWidth, tileHeight, 1, 1)    // Tile 4: bottom-right
             )
 
             for (i in 0 until tilesVisible) {
-                val (x, y) = tilePositions[i]
+                val config = tileConfigs[i]
 
                 // Create tile bitmap (crop and scale)
-                val srcX = (i % 2) * (bitmap.width / 2)
-                val srcY = (i / 2) * (bitmap.height / 2)
+                val srcX = config.srcXIndex * (bitmap.width / 2)
+                val srcY = config.srcYIndex * (bitmap.height / 2)
                 val srcWidth = bitmap.width / 2
                 val srcHeight = bitmap.height / 2
 
@@ -1533,7 +1545,7 @@ class VideoEncoder(private val context: Context) {
                     scaledTile
                 }
 
-                canvas.drawBitmap(finalTile, x.toFloat(), y.toFloat(), null)
+                canvas.drawBitmap(finalTile, config.x.toFloat(), config.y.toFloat(), null)
                 finalTile.recycle()
             }
         }
@@ -1605,7 +1617,8 @@ class VideoEncoder(private val context: Context) {
         Log.d(TAG, "4-tile video: $totalFrames frames (${videoDurationUs / 1_000_000.0}s), ${framesPerImage} frames/image")
 
         // Timeline boundaries (as frame indices within each image)
-        val grayscaleEndFrame = (framesPerImage * 0.2f).toInt()  // ~15 frames
+        // MODIFIED: Start directly in 4-split mode (no fullscreen grayscale phase)
+        val grayscaleEndFrame = 0  // Start with tiles immediately
         val tilesEndFrame = (framesPerImage * 0.6f).toInt()      // ~45 frames
         val colorEndFrame = (framesPerImage * 0.8f).toInt()      // ~60 frames
         // Zoom continues until framesPerImage (~75 frames)
@@ -1668,4 +1681,18 @@ class VideoEncoder(private val context: Context) {
             throw e
         }
     }
+
+    /**
+     * Configuration for a single tile in the 4-tile layout
+     * @param x Screen X position (in pixels)
+     * @param y Screen Y position (in pixels)
+     * @param srcXIndex Source image X index (0 = left half, 1 = right half)
+     * @param srcYIndex Source image Y index (0 = top half, 1 = bottom half)
+     */
+    private data class TileConfig(
+        val x: Int,
+        val y: Int,
+        val srcXIndex: Int,
+        val srcYIndex: Int
+    )
 }
