@@ -57,21 +57,45 @@ class VideoEncoder(private val context: Context) {
      *
      * @param imagePaths List of absolute paths to image files
      * @param outputPath Absolute path where MP4 should be written
+     * @param templateId Template ID to determine rendering mode
      * @param imageDurationMs Duration each image is displayed (milliseconds)
      * @param transitionDurationMs Duration of crossfade transition (milliseconds)
+     * @param musicTrackName Name of the music file to use (e.g., "bgm_default.mp3")
      * @return Path to the created video file
      */
     fun renderSlideshow(
         imagePaths: List<String>,
         outputPath: String,
+        templateId: String = "classic_slideshow",
         imageDurationMs: Int = 1500,
-        transitionDurationMs: Int = 500
+        transitionDurationMs: Int = 500,
+        musicTrackName: String = "bgm_default.mp3"
     ): String {
         Log.d(TAG, "Starting slideshow render:")
+        Log.d(TAG, "  Template: $templateId")
         Log.d(TAG, "  Images: ${imagePaths.size}")
         Log.d(TAG, "  Output: $outputPath")
         Log.d(TAG, "  Image duration: ${imageDurationMs}ms")
         Log.d(TAG, "  Transition duration: ${transitionDurationMs}ms")
+
+        // Route to appropriate rendering method based on template
+        return when (templateId) {
+            "four_tile_intro" -> renderFourTileIntro(imagePaths, outputPath, musicTrackName)
+            else -> renderClassicSlideshow(imagePaths, outputPath, imageDurationMs, transitionDurationMs, musicTrackName)
+        }
+    }
+
+    /**
+     * Render classic slideshow with crossfade transitions
+     */
+    private fun renderClassicSlideshow(
+        imagePaths: List<String>,
+        outputPath: String,
+        imageDurationMs: Int,
+        transitionDurationMs: Int,
+        musicTrackName: String
+    ): String {
+        Log.d(TAG, "Rendering classic slideshow")
 
         // Calculate video parameters
         val framesPerImage = (imageDurationMs * VIDEO_FPS) / 1000
@@ -82,7 +106,7 @@ class VideoEncoder(private val context: Context) {
         Log.d(TAG, "Video will be $totalFrames frames (${videoDurationUs / 1_000_000.0}s)")
 
         // Check for BGM file
-        val bgmPath = getBgmFilePath()
+        val bgmPath = getBgmFilePath(musicTrackName)
         val hasBgm = bgmPath != null && File(bgmPath).exists()
         if (hasBgm) {
             Log.d(TAG, "BGM file found: $bgmPath")
@@ -130,11 +154,13 @@ class VideoEncoder(private val context: Context) {
 
     /**
      * Get the BGM file path from external storage
-     * Path: /Android/data/com.example.sns_auto/files/bgm/bgm_default.mp3
+     * Path: /Android/data/com.example.sns_auto/files/bgm/{musicTrackName}
      *
      * If the file doesn't exist but exists in res/raw, it will be copied automatically.
+     *
+     * @param musicTrackName Name of the music file (e.g., "bgm_default.mp3")
      */
-    private fun getBgmFilePath(): String? {
+    private fun getBgmFilePath(musicTrackName: String): String? {
         return try {
             val externalFilesDir = context.getExternalFilesDir(null)
             if (externalFilesDir != null) {
@@ -145,12 +171,12 @@ class VideoEncoder(private val context: Context) {
                     Log.d(TAG, "Created BGM directory: ${bgmDir.absolutePath}")
                 }
 
-                val bgmFile = File(bgmDir, "bgm_default.mp3")
+                val bgmFile = File(bgmDir, musicTrackName)
 
                 // If BGM doesn't exist in external storage, try to copy from res/raw
                 if (!bgmFile.exists()) {
                     Log.d(TAG, "BGM not found in external storage, checking res/raw...")
-                    copyBgmFromResources(bgmFile)
+                    copyBgmFromResources(bgmFile, musicTrackName)
                 }
 
                 bgmFile.absolutePath
@@ -165,15 +191,18 @@ class VideoEncoder(private val context: Context) {
 
     /**
      * Copy BGM from app resources (res/raw) to external storage
-     * Resource ID: R.raw.bgm_default
+     *
+     * @param destinationFile Destination file to copy to
+     * @param musicTrackName Name of the music file (e.g., "bgm_default.mp3")
      */
-    private fun copyBgmFromResources(destinationFile: File) {
+    private fun copyBgmFromResources(destinationFile: File, musicTrackName: String) {
         try {
-            // Check if bgm_default exists in res/raw
-            val resourceId = context.resources.getIdentifier("bgm_default", "raw", context.packageName)
+            // Extract resource name from musicTrackName (remove .mp3 extension)
+            val resourceName = musicTrackName.removeSuffix(".mp3")
+            val resourceId = context.resources.getIdentifier(resourceName, "raw", context.packageName)
 
             if (resourceId != 0) {
-                Log.d(TAG, "Found BGM in res/raw, copying to external storage...")
+                Log.d(TAG, "Found BGM '$resourceName' in res/raw, copying to external storage...")
 
                 context.resources.openRawResource(resourceId).use { inputStream ->
                     FileOutputStream(destinationFile).use { outputStream ->
@@ -183,7 +212,7 @@ class VideoEncoder(private val context: Context) {
 
                 Log.d(TAG, "BGM copied successfully: ${destinationFile.absolutePath}")
             } else {
-                Log.d(TAG, "No BGM found in res/raw (R.raw.bgm_default not found)")
+                Log.d(TAG, "No BGM found in res/raw (R.raw.$resourceName not found)")
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to copy BGM from resources: ${e.message}", e)
@@ -1079,6 +1108,99 @@ class VideoEncoder(private val context: Context) {
             if (error != EGL14.EGL_SUCCESS) {
                 throw RuntimeException("$msg: EGL error: 0x${Integer.toHexString(error)}")
             }
+        }
+    }
+
+    /**
+     * Render 4-tile intro template
+     *
+     * Timeline per image (based on 30fps):
+     * - t0 = 0.0s: Tile 2 (top-right) appears in grayscale
+     * - t1 = 0.2s: Tile 3 (bottom-left) appears in grayscale
+     * - t2 = 0.4s: Tile 1 (top-left) appears in grayscale
+     * - t3 = 0.6s: Tile 4 (bottom-right) appears in grayscale
+     * - t4 = 0.8s: All tiles transition grayscale->color + zoom effect
+     *
+     * Total per image: ~2 seconds
+     *
+     * NOTE: This is a simplified implementation. Full spec requires:
+     * - SFX audio mixing (sfx_hit_1.mp3, sfx_click_2.mp3)
+     * - Grayscale shader with smooth transition
+     * - Two-stage zoom animation (fast then slow)
+     *
+     * Current implementation: Basic 4-tile reveal with fade-in
+     */
+    private fun renderFourTileIntro(
+        imagePaths: List<String>,
+        outputPath: String,
+        musicTrackName: String
+    ): String {
+        Log.d(TAG, "Rendering 4-tile intro template")
+        Log.w(TAG, "NOTE: Using simplified 4-tile implementation")
+        Log.w(TAG, "Full spec with SFX/grayscale/zoom will be implemented in future update")
+
+        // Timeline constants
+        val beatIntervalSec = 0.2f
+        val perImageDurationSec = 2.0f  // Total time per image
+
+        // Frame calculations
+        val framesPerImage = (perImageDurationSec * VIDEO_FPS).toInt()
+        val totalFrames = imagePaths.size * framesPerImage
+        val videoDurationUs = (totalFrames * 1_000_000L) / VIDEO_FPS
+
+        Log.d(TAG, "4-tile video: $totalFrames frames (${videoDurationUs / 1_000_000.0}s)")
+
+        // Check for BGM file
+        val bgmPath = getBgmFilePath(musicTrackName)
+        val hasBgm = bgmPath != null && File(bgmPath).exists()
+        if (hasBgm) {
+            Log.d(TAG, "BGM file found: $bgmPath")
+        } else {
+            Log.d(TAG, "No BGM file found, rendering without audio")
+        }
+
+        // Load and prepare images
+        val bitmaps = loadAndPrepareImages(imagePaths)
+
+        try {
+            // Setup MediaMuxer
+            val muxer = MediaMuxer(outputPath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+
+            // For now, use simplified rendering (similar to classic slideshow)
+            // TODO: Implement full 4-tile animation with:
+            // - 2x2 grid splitting
+            // - Timed tile reveals
+            // - Grayscale to color transition
+            // - Two-stage zoom
+            // - SFX audio mixing
+
+            val trackIndices = encodeVideoAndAudio(
+                muxer = muxer,
+                bitmaps = bitmaps,
+                totalFrames = totalFrames,
+                framesPerImage = framesPerImage,
+                crossfadeFrames = 0,  // No crossfade for 4-tile
+                videoDurationUs = videoDurationUs,
+                bgmPath = bgmPath
+            )
+
+            // Finalize muxer
+            if (trackIndices.muxerStarted) {
+                muxer.stop()
+            }
+            muxer.release()
+
+            Log.d(TAG, "4-tile video encoding complete: $outputPath")
+
+            // Cleanup bitmaps
+            bitmaps.forEach { it.recycle() }
+
+            return outputPath
+        } catch (e: Exception) {
+            // Cleanup on error
+            bitmaps.forEach { it.recycle() }
+            File(outputPath).delete()
+            throw e
         }
     }
 }

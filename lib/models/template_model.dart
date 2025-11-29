@@ -13,8 +13,6 @@ class TemplateModel {
   });
 
   /// Get available templates
-  /// Currently only one template is available, but the structure
-  /// is designed to be easily extended in the future
   static List<TemplateModel> getMockTemplates() {
     return [
       TemplateModel(
@@ -26,6 +24,34 @@ class TemplateModel {
           imageDurationSeconds: 2.5,
           transitionDurationSeconds: 0.5,
           musicTrackName: 'bgm_default.mp3',
+          minImages: 1,
+          maxImages: 10,
+        ),
+      ),
+      TemplateModel(
+        id: 'short_story',
+        name: '짧은 스토리',
+        description: '3~5장의 사진으로 만드는 스토리',
+        config: TemplateConfig(
+          transitionType: TransitionType.fade,
+          imageDurationSeconds: 2.0,
+          transitionDurationSeconds: 0.3,
+          musicTrackName: 'bgm_default.mp3',
+          minImages: 3,
+          maxImages: 5,
+        ),
+      ),
+      TemplateModel(
+        id: 'four_tile_intro',
+        name: '4-타일 인트로',
+        description: '타일 분할 + 리듬감 있는 전환',
+        config: TemplateConfig(
+          transitionType: TransitionType.cut,
+          imageDurationSeconds: 2.0,
+          transitionDurationSeconds: 0.0,
+          musicTrackName: 'bgm_default.mp3',
+          minImages: 3,
+          maxImages: 5,
         ),
       ),
     ];
@@ -40,6 +66,8 @@ class TemplateConfig {
   final String? musicTrackName;
   final bool addTextOverlay;
   final String? textOverlayContent;
+  final int? minImages;
+  final int? maxImages;
 
   const TemplateConfig({
     required this.transitionType,
@@ -48,7 +76,31 @@ class TemplateConfig {
     this.musicTrackName,
     this.addTextOverlay = false,
     this.textOverlayContent,
+    this.minImages,
+    this.maxImages,
   });
+
+  /// Get the allowed image count range as a string
+  String getImageCountRange() {
+    if (minImages != null && maxImages != null) {
+      if (minImages == maxImages) {
+        return '$minImages장';
+      }
+      return '$minImages~$maxImages장';
+    } else if (minImages != null) {
+      return '최소 $minImages장';
+    } else if (maxImages != null) {
+      return '최대 $maxImages장';
+    }
+    return '제한 없음';
+  }
+
+  /// Check if the given number of images is valid for this template
+  bool isValidImageCount(int count) {
+    if (minImages != null && count < minImages!) return false;
+    if (maxImages != null && count > maxImages!) return false;
+    return true;
+  }
 }
 
 /// Types of transitions between images
