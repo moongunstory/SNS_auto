@@ -5,11 +5,13 @@ class RenderJob {
   final List<String> imagePaths;
   final TemplateModel template;
   final String? outputFileName;
+  final String? musicTrackName;  // Override template's default music (null = use template default)
 
   const RenderJob({
     required this.imagePaths,
     required this.template,
     this.outputFileName,
+    this.musicTrackName,
   });
 
   /// Validates that the render job has valid data

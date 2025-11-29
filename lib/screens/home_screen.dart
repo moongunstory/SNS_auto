@@ -29,6 +29,7 @@ class _HomeScreenState extends State<HomeScreen> {
   List<String> _selectedImagePaths = [];
   TemplateModel? _selectedTemplate;
   final List<TemplateModel> _templates = TemplateModel.getMockTemplates();
+  String? _selectedMusicTrack;  // User's selected music track for current template
 
   @override
   Widget build(BuildContext context) {
@@ -48,6 +49,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   children: [
                     // Template selection section (먼저 표시)
                     _buildTemplateSelectionSection(),
+
+                    const SizedBox(height: AppConstants.paddingLarge),
+
+                    // Music selection section (템플릿 선택 후에만 표시)
+                    if (_selectedTemplate != null) _buildMusicSelectionSection(),
 
                     const SizedBox(height: AppConstants.paddingLarge),
 
@@ -174,6 +180,55 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Widget _buildMusicSelectionSection() {
+    if (_selectedTemplate == null) return const SizedBox.shrink();
+
+    final allowMusicSelection = _selectedTemplate!.config.allowMusicSelection;
+    final selectedTrack = MusicTrack.getAvailableBgmTracks().firstWhere(
+      (track) => track.fileName == _selectedMusicTrack,
+      orElse: () => MusicTrack.getAvailableBgmTracks().first,
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '배경음악',
+          style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+        ),
+
+        const SizedBox(height: AppConstants.paddingMedium),
+
+        // Music selection card
+        Card(
+          child: ListTile(
+            leading: Icon(
+              allowMusicSelection ? Icons.music_note : Icons.music_off,
+              color: allowMusicSelection
+                  ? Theme.of(context).colorScheme.primary
+                  : Theme.of(context).colorScheme.onSurface.withOpacity(0.4),
+            ),
+            title: Text(selectedTrack.displayName),
+            subtitle: Text(
+              allowMusicSelection
+                  ? '탭하여 변경'
+                  : '이 템플릿은 배경음악을 사용하지 않습니다',
+              style: TextStyle(
+                fontSize: 12,
+                color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
+              ),
+            ),
+            trailing: allowMusicSelection ? const Icon(Icons.chevron_right) : null,
+            enabled: allowMusicSelection,
+            onTap: allowMusicSelection ? _showMusicSelectionDialog : null,
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildBottomButton() {
     final bool canGenerate = _selectedImagePaths.isNotEmpty && _selectedTemplate != null;
 
@@ -244,6 +299,9 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       _selectedTemplate = template;
 
+      // Initialize music selection based on template's default
+      _selectedMusicTrack = template.config.musicTrackName;
+
       // Clear images if they don't match the new template's requirements
       if (_selectedImagePaths.isNotEmpty &&
           !template.config.isValidImageCount(_selectedImagePaths.length)) {
@@ -259,15 +317,74 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  Future<void> _showMusicSelectionDialog() async {
+    final availableTracks = MusicTrack.getAvailableBgmTracks();
+
+    await showDialog<String>(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('배경음악 선택'),
+          contentPadding: const EdgeInsets.symmetric(vertical: 12),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: availableTracks.length,
+              itemBuilder: (context, index) {
+                final track = availableTracks[index];
+                final isSelected = track.fileName == _selectedMusicTrack;
+
+                return ListTile(
+                  leading: Icon(
+                    track.isNoMusic ? Icons.music_off : Icons.music_note,
+                    color: isSelected
+                        ? Theme.of(context).colorScheme.primary
+                        : Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
+                  ),
+                  title: Text(
+                    track.displayName,
+                    style: TextStyle(
+                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                      color: isSelected
+                          ? Theme.of(context).colorScheme.primary
+                          : null,
+                    ),
+                  ),
+                  trailing: isSelected
+                      ? Icon(Icons.check, color: Theme.of(context).colorScheme.primary)
+                      : null,
+                  onTap: () {
+                    setState(() {
+                      _selectedMusicTrack = track.fileName;
+                    });
+                    Navigator.of(context).pop();
+                  },
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('닫기'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   void _generateVideo() {
     if (_selectedImagePaths.isEmpty || _selectedTemplate == null) {
       return;
     }
 
-    // Create render job
+    // Create render job with user's selected music (or template default)
     final renderJob = RenderJob(
       imagePaths: _selectedImagePaths,
       template: _selectedTemplate!,
+      musicTrackName: _selectedMusicTrack,  // User's music selection
     );
 
     // Navigate to RenderScreen

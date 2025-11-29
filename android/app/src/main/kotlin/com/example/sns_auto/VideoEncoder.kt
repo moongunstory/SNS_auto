@@ -318,7 +318,8 @@ class VideoEncoder(private val context: Context) {
         val filePath: String,
         val startMs: Long,
         val maxDurationMs: Long = Long.MAX_VALUE,
-        val speed: Float = 1.0f  // Playback speed multiplier (1.0 = normal, 1.3 = 30% faster)
+        val speed: Float = 1.0f,  // Playback speed multiplier (1.0 = normal, 1.3 = 30% faster)
+        val pitchCorrection: Boolean = false  // If true, preserve original pitch when speed != 1.0
     ) {
         fun validate(totalDurationMs: Long): Boolean {
             return startMs >= 0 && startMs < totalDurationMs
@@ -1828,9 +1829,8 @@ class VideoEncoder(private val context: Context) {
      * - Image 1: "After" (interior after remodeling)
      *
      * Audio timeline:
-     * - before.mp3 plays from t=0
-     * - bell_ring.mp3 plays at t=BEFORE_HOLD_MS
-     * - after.mp3 plays immediately after bell_ring.mp3
+     * - sfx_before.mp3 plays from t=0 at 1.3x tempo with pitch correction (sounds faster but same voice)
+     * - sfx_after.mp3 plays from t=BEFORE_HOLD_MS at normal speed
      *
      * Visual timeline:
      * - 0.0 ~ BEFORE_HOLD_MS: Show Before image + "Before" text (static)
@@ -1888,37 +1888,28 @@ class VideoEncoder(private val context: Context) {
         // ============================================================================
         // 2. AUDIO TIMELINE
         // ============================================================================
-        val beforeMp3Path = getAudioFilePath("before.mp3")
-        val bellRingMp3Path = getAudioFilePath("bell_ring.mp3")
-        val afterMp3Path = getAudioFilePath("after.mp3")
+        val beforeMp3Path = getAudioFilePath("sfx_before.mp3")
+        val afterMp3Path = getAudioFilePath("sfx_after.mp3")
 
         // Validate audio files
         if (beforeMp3Path == null || !File(beforeMp3Path).exists()) {
-            throw IllegalStateException("before.mp3 not found in res/raw or external storage")
-        }
-        if (bellRingMp3Path == null || !File(bellRingMp3Path).exists()) {
-            throw IllegalStateException("bell_ring.mp3 not found in res/raw or external storage")
+            throw IllegalStateException("sfx_before.mp3 not found in res/raw or external storage")
         }
         if (afterMp3Path == null || !File(afterMp3Path).exists()) {
-            throw IllegalStateException("after.mp3 not found in res/raw or external storage")
+            throw IllegalStateException("sfx_after.mp3 not found in res/raw or external storage")
         }
 
         val audioEvents = listOf(
             AudioEvent(
-                assetName = "before.mp3",
+                assetName = "sfx_before.mp3",
                 filePath = beforeMp3Path,
                 startMs = 0,
                 maxDurationMs = BEFORE_HOLD_MS,
-                speed = 1.3f  // Play before.mp3 at 1.3x speed (30% faster)
+                speed = 1.3f,  // Play before at 1.3x tempo (30% faster)
+                pitchCorrection = true  // Preserve original pitch despite speed change
             ),
             AudioEvent(
-                assetName = "bell_ring.mp3",
-                filePath = bellRingMp3Path,
-                startMs = BEFORE_HOLD_MS,
-                maxDurationMs = Long.MAX_VALUE
-            ),
-            AudioEvent(
-                assetName = "after.mp3",
+                assetName = "sfx_after.mp3",
                 filePath = afterMp3Path,
                 startMs = BEFORE_HOLD_MS,
                 maxDurationMs = AFTER_HOLD_MS
@@ -2316,8 +2307,14 @@ class VideoEncoder(private val context: Context) {
 
                 // Apply speed change if needed
                 if (event.speed != 1.0f) {
-                    audioData = resampleAudioForSpeed(audioData, event.speed)
-                    Log.d(TAG, "Resampled ${event.assetName} at ${event.speed}x speed: ${audioData.samples.size} samples")
+                    audioData = if (event.pitchCorrection) {
+                        // Use pitch-preserving time-stretch (WSOLA algorithm)
+                        timeStretchWithPitchCorrection(audioData, event.speed)
+                    } else {
+                        // Use simple resampling (changes both tempo and pitch)
+                        resampleAudioForSpeed(audioData, event.speed)
+                    }
+                    Log.d(TAG, "Resampled ${event.assetName} at ${event.speed}x speed (pitchCorrection=${event.pitchCorrection}): ${audioData.samples.size} samples")
                 }
 
                 // Calculate start sample position
@@ -2417,6 +2414,89 @@ class VideoEncoder(private val context: Context) {
                     newSamples[targetIdx] = interpolated.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
                 }
             }
+        }
+
+        return AudioData(newSamples, audioData.sampleRate, audioData.channelCount)
+    }
+
+    /**
+     * Time-stretch audio while preserving pitch using WSOLA algorithm
+     * (Waveform Similarity Overlap-Add)
+     *
+     * @param audioData Original audio data
+     * @param speed Speed multiplier (1.0 = normal, 1.3 = 30% faster, 0.8 = 20% slower)
+     * @return Time-stretched audio with preserved pitch
+     */
+    private fun timeStretchWithPitchCorrection(audioData: AudioData, speed: Float): AudioData {
+        if (speed == 1.0f) return audioData
+
+        val originalSamples = audioData.samples
+        val channelCount = audioData.channelCount
+        val sampleRate = audioData.sampleRate
+
+        // WSOLA parameters (tuned for speech at ~44.1kHz)
+        val frameSize = (0.02 * sampleRate * channelCount).toInt()  // 20ms frames
+        val hopSizeInput = (frameSize / speed).toInt()  // Input hop size
+        val hopSizeOutput = frameSize  // Output hop size
+        val searchRange = (0.01 * sampleRate * channelCount).toInt()  // 10ms search range
+
+        // Calculate output size
+        val newSampleCount = (originalSamples.size / speed).toInt()
+        val newSamples = ShortArray(newSampleCount)
+
+        var inputPos = 0
+        var outputPos = 0
+
+        // Hann window for smooth overlapping
+        val window = FloatArray(frameSize) { i ->
+            0.5f * (1.0f - kotlin.math.cos(2.0 * kotlin.math.PI * i / (frameSize - 1))).toFloat()
+        }
+
+        while (outputPos + frameSize < newSampleCount && inputPos + frameSize < originalSamples.size) {
+            // Calculate natural input position
+            val naturalInputPos = (outputPos * speed).toInt()
+
+            // Search for best match around natural position
+            var bestPos = naturalInputPos
+            var bestCorrelation = Float.NEGATIVE_INFINITY
+
+            val searchStart = maxOf(0, naturalInputPos - searchRange)
+            val searchEnd = minOf(originalSamples.size - frameSize, naturalInputPos + searchRange)
+
+            for (testPos in searchStart until searchEnd step channelCount) {
+                // Calculate cross-correlation between frames
+                var correlation = 0.0
+                val overlapSize = minOf(frameSize, outputPos)  // Overlap with previous frame
+
+                if (overlapSize > 0 && outputPos >= overlapSize) {
+                    for (i in 0 until overlapSize) {
+                        if (testPos + i < originalSamples.size && outputPos - overlapSize + i < newSamples.size) {
+                            val s1 = originalSamples[testPos + i].toDouble()
+                            val s2 = newSamples[outputPos - overlapSize + i].toDouble()
+                            correlation += s1 * s2
+                        }
+                    }
+                }
+
+                if (correlation > bestCorrelation) {
+                    bestCorrelation = correlation.toFloat()
+                    bestPos = testPos
+                }
+            }
+
+            // Copy frame with overlap-add
+            for (i in 0 until frameSize) {
+                if (bestPos + i < originalSamples.size && outputPos + i < newSamples.size) {
+                    val sample = (originalSamples[bestPos + i] * window[i]).toInt()
+
+                    // Overlap-add with existing samples
+                    val mixed = newSamples[outputPos + i].toInt() + sample
+                    newSamples[outputPos + i] = mixed.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+                }
+            }
+
+            inputPos = bestPos + hopSizeInput
+            outputPos += hopSizeOutput
         }
 
         return AudioData(newSamples, audioData.sampleRate, audioData.channelCount)
