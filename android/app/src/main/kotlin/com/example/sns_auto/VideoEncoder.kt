@@ -1961,6 +1961,35 @@ class VideoEncoder(private val context: Context) {
     }
 
     /**
+     * Copy audio file from res/raw to external storage
+     */
+    private fun copyBgmFromResources(audioFile: File, audioFileName: String) {
+        try {
+            // Get resource name without extension
+            val resourceName = audioFileName.substringBeforeLast(".")
+
+            // Get resource ID
+            val resourceId = context.resources.getIdentifier(resourceName, "raw", context.packageName)
+
+            if (resourceId == 0) {
+                Log.w(TAG, "Audio resource not found in res/raw: $resourceName")
+                return
+            }
+
+            // Copy from resources to file
+            context.resources.openRawResource(resourceId).use { input ->
+                FileOutputStream(audioFile).use { output ->
+                    input.copyTo(output)
+                }
+            }
+
+            Log.d(TAG, "Copied audio from resources: $resourceName -> ${audioFile.absolutePath}")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to copy audio from resources: ${e.message}", e)
+        }
+    }
+
+    /**
      * Encode Before & After video with audio mixing using segment-based timeline
      */
     private fun encodeBeforeAfterVideo(
