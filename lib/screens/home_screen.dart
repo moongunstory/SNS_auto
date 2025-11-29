@@ -198,12 +198,35 @@ class _HomeScreenState extends State<HomeScreen> {
   // ============================================================================
 
   Future<void> _pickImages() async {
+    // Check if template is selected first
+    if (_selectedTemplate == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('먼저 템플릿을 선택해주세요'),
+          backgroundColor: Theme.of(context).colorScheme.error,
+        ),
+      );
+      return;
+    }
+
     final result = await _mediaPickerService.pickImages();
 
     if (!mounted) return;
 
     result.fold(
       onSuccess: (imagePaths) {
+        // Validate image count against template limits
+        final config = _selectedTemplate!.config;
+        if (!config.isValidImageCount(imagePaths.length)) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('이 템플릿은 ${config.getImageCountRange()}만 가능합니다'),
+              backgroundColor: Theme.of(context).colorScheme.error,
+            ),
+          );
+          return;
+        }
+
         setState(() {
           _selectedImagePaths = imagePaths;
         });
@@ -222,6 +245,19 @@ class _HomeScreenState extends State<HomeScreen> {
   void _selectTemplate(TemplateModel template) {
     setState(() {
       _selectedTemplate = template;
+
+      // Clear images if they don't match the new template's requirements
+      if (_selectedImagePaths.isNotEmpty &&
+          !template.config.isValidImageCount(_selectedImagePaths.length)) {
+        _selectedImagePaths = [];
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('템플릿이 변경되어 선택된 사진이 초기화되었습니다 (${template.config.getImageCountRange()} 필요)'),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
     });
   }
 

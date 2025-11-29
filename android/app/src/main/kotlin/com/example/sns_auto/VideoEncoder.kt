@@ -59,13 +59,15 @@ class VideoEncoder(private val context: Context) {
      * @param outputPath Absolute path where MP4 should be written
      * @param imageDurationMs Duration each image is displayed (milliseconds)
      * @param transitionDurationMs Duration of crossfade transition (milliseconds)
+     * @param musicTrackName Name of the music file to use (e.g., "bgm_default.mp3")
      * @return Path to the created video file
      */
     fun renderSlideshow(
         imagePaths: List<String>,
         outputPath: String,
         imageDurationMs: Int = 1500,
-        transitionDurationMs: Int = 500
+        transitionDurationMs: Int = 500,
+        musicTrackName: String = "bgm_default.mp3"
     ): String {
         Log.d(TAG, "Starting slideshow render:")
         Log.d(TAG, "  Images: ${imagePaths.size}")
@@ -82,7 +84,7 @@ class VideoEncoder(private val context: Context) {
         Log.d(TAG, "Video will be $totalFrames frames (${videoDurationUs / 1_000_000.0}s)")
 
         // Check for BGM file
-        val bgmPath = getBgmFilePath()
+        val bgmPath = getBgmFilePath(musicTrackName)
         val hasBgm = bgmPath != null && File(bgmPath).exists()
         if (hasBgm) {
             Log.d(TAG, "BGM file found: $bgmPath")
@@ -130,11 +132,13 @@ class VideoEncoder(private val context: Context) {
 
     /**
      * Get the BGM file path from external storage
-     * Path: /Android/data/com.example.sns_auto/files/bgm/bgm_default.mp3
+     * Path: /Android/data/com.example.sns_auto/files/bgm/{musicTrackName}
      *
      * If the file doesn't exist but exists in res/raw, it will be copied automatically.
+     *
+     * @param musicTrackName Name of the music file (e.g., "bgm_default.mp3")
      */
-    private fun getBgmFilePath(): String? {
+    private fun getBgmFilePath(musicTrackName: String): String? {
         return try {
             val externalFilesDir = context.getExternalFilesDir(null)
             if (externalFilesDir != null) {
@@ -145,12 +149,12 @@ class VideoEncoder(private val context: Context) {
                     Log.d(TAG, "Created BGM directory: ${bgmDir.absolutePath}")
                 }
 
-                val bgmFile = File(bgmDir, "bgm_default.mp3")
+                val bgmFile = File(bgmDir, musicTrackName)
 
                 // If BGM doesn't exist in external storage, try to copy from res/raw
                 if (!bgmFile.exists()) {
                     Log.d(TAG, "BGM not found in external storage, checking res/raw...")
-                    copyBgmFromResources(bgmFile)
+                    copyBgmFromResources(bgmFile, musicTrackName)
                 }
 
                 bgmFile.absolutePath
@@ -165,15 +169,18 @@ class VideoEncoder(private val context: Context) {
 
     /**
      * Copy BGM from app resources (res/raw) to external storage
-     * Resource ID: R.raw.bgm_default
+     *
+     * @param destinationFile Destination file to copy to
+     * @param musicTrackName Name of the music file (e.g., "bgm_default.mp3")
      */
-    private fun copyBgmFromResources(destinationFile: File) {
+    private fun copyBgmFromResources(destinationFile: File, musicTrackName: String) {
         try {
-            // Check if bgm_default exists in res/raw
-            val resourceId = context.resources.getIdentifier("bgm_default", "raw", context.packageName)
+            // Extract resource name from musicTrackName (remove .mp3 extension)
+            val resourceName = musicTrackName.removeSuffix(".mp3")
+            val resourceId = context.resources.getIdentifier(resourceName, "raw", context.packageName)
 
             if (resourceId != 0) {
-                Log.d(TAG, "Found BGM in res/raw, copying to external storage...")
+                Log.d(TAG, "Found BGM '$resourceName' in res/raw, copying to external storage...")
 
                 context.resources.openRawResource(resourceId).use { inputStream ->
                     FileOutputStream(destinationFile).use { outputStream ->
@@ -183,7 +190,7 @@ class VideoEncoder(private val context: Context) {
 
                 Log.d(TAG, "BGM copied successfully: ${destinationFile.absolutePath}")
             } else {
-                Log.d(TAG, "No BGM found in res/raw (R.raw.bgm_default not found)")
+                Log.d(TAG, "No BGM found in res/raw (R.raw.$resourceName not found)")
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to copy BGM from resources: ${e.message}", e)

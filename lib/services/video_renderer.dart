@@ -47,6 +47,7 @@ class VideoRenderer {
         // Template configuration (using simple defaults for base template)
         'imageDurationMs': (job.template.config.imageDurationSeconds * 1000).toInt(),
         'transitionDurationMs': (job.template.config.transitionDurationSeconds * 1000).toInt(),
+        'musicTrackName': job.template.config.musicTrackName ?? 'bgm_default.mp3',
       };
 
       print('[VideoRenderer] Calling native encoder...');

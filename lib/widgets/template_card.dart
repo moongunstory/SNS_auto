@@ -54,7 +54,7 @@ class TemplateCard extends StatelessWidget {
           padding: const EdgeInsets.all(AppConstants.paddingMedium),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
             children: [
               // Template icon (if selected)
               if (isSelected)
@@ -67,30 +67,59 @@ class TemplateCard extends StatelessWidget {
               if (isSelected) const SizedBox(height: AppConstants.paddingSmall),
 
               // Template name
-              Text(
-                template.name,
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.bold,
-                      color: isSelected
-                          ? Theme.of(context).colorScheme.onPrimaryContainer
-                          : Theme.of(context).colorScheme.onSurface,
-                    ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+              Flexible(
+                child: Text(
+                  template.name,
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: isSelected
+                            ? Theme.of(context).colorScheme.onPrimaryContainer
+                            : Theme.of(context).colorScheme.onSurface,
+                      ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
 
               const SizedBox(height: AppConstants.paddingSmall),
 
               // Template description
-              Text(
-                template.description,
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: isSelected
-                          ? Theme.of(context).colorScheme.onPrimaryContainer.withOpacity(0.8)
-                          : Theme.of(context).colorScheme.onSurface.withOpacity(0.7),
-                    ),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
+              Flexible(
+                child: Text(
+                  template.description,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: isSelected
+                            ? Theme.of(context).colorScheme.onPrimaryContainer.withOpacity(0.8)
+                            : Theme.of(context).colorScheme.onSurface.withOpacity(0.7),
+                      ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+
+              const SizedBox(height: AppConstants.paddingSmall),
+
+              // Image count limit
+              Row(
+                children: [
+                  Icon(
+                    Icons.photo_library,
+                    size: 14,
+                    color: isSelected
+                        ? Theme.of(context).colorScheme.onPrimaryContainer.withOpacity(0.6)
+                        : Theme.of(context).colorScheme.onSurface.withOpacity(0.5),
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    template.config.getImageCountRange(),
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          fontSize: 11,
+                          color: isSelected
+                              ? Theme.of(context).colorScheme.onPrimaryContainer.withOpacity(0.6)
+                              : Theme.of(context).colorScheme.onSurface.withOpacity(0.5),
+                        ),
+                  ),
+                ],
               ),
             ],
           ),

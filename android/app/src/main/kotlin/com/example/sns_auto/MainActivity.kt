@@ -27,6 +27,7 @@ class MainActivity : FlutterActivity() {
                         val outputPath = call.argument<String>("outputPath")
                         val imageDurationMs = call.argument<Int>("imageDurationMs") ?: 1500
                         val transitionDurationMs = call.argument<Int>("transitionDurationMs") ?: 500
+                        val musicTrackName = call.argument<String>("musicTrackName") ?: "bgm_default.mp3"
 
                         if (imagePaths == null || imagePaths.isEmpty()) {
                             result.error("INVALID_ARGS", "Image paths list is empty or null", null)
@@ -46,7 +47,8 @@ class MainActivity : FlutterActivity() {
                                     imagePaths = imagePaths,
                                     outputPath = outputPath,
                                     imageDurationMs = imageDurationMs,
-                                    transitionDurationMs = transitionDurationMs
+                                    transitionDurationMs = transitionDurationMs,
+                                    musicTrackName = musicTrackName
                                 )
 
                                 // Return success on main thread
