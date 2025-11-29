@@ -150,12 +150,16 @@ class _HomeScreenState extends State<HomeScreen> {
 
         const SizedBox(height: AppConstants.paddingMedium),
 
-        // Template cards in horizontal scroll
-        SizedBox(
-          height: AppConstants.templateCardHeight + AppConstants.paddingMedium,
+        // Template cards in horizontal scroll - dynamic height
+        ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.25, // 화면 높이의 25% 이하
+            minHeight: 120,
+          ),
           child: ListView.builder(
             scrollDirection: Axis.horizontal,
             itemCount: _templates.length,
+            shrinkWrap: true,
             itemBuilder: (context, index) {
               final template = _templates[index];
               return TemplateCard(
