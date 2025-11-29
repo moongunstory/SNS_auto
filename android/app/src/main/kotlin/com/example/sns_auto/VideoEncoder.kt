@@ -496,8 +496,26 @@ class VideoEncoder(private val context: Context) {
                         val inputBuffer = audioEncoder.getInputBuffer(inputBufferId)!!
                         inputBuffer.clear()
 
-                        val samplesToWrite = min(audioInputBufferSize, audioData.samples.size - audioInputOffset)
+                        // Calculate max samples that can fit in buffer (each sample is 2 bytes for 16-bit PCM)
+                        val bufferCapacitySamples = inputBuffer.capacity() / 2
+                        val remainingSamples = audioData.samples.size - audioInputOffset
+                        val samplesToWrite = min(min(bufferCapacitySamples, audioInputBufferSize), remainingSamples)
+
+                        // Safety check and logging
+                        if (bufferCapacitySamples < audioInputBufferSize) {
+                            Log.w(TAG, "Audio input buffer capacity ($bufferCapacitySamples samples, ${inputBuffer.capacity()} bytes) " +
+                                    "is smaller than requested ($audioInputBufferSize samples). Using buffer capacity.")
+                        }
+
                         if (samplesToWrite > 0) {
+                            // Verify we won't overflow (defensive check)
+                            val bytesNeeded = samplesToWrite * 2
+                            if (bytesNeeded > inputBuffer.capacity()) {
+                                val errorMsg = "Audio buffer overflow prevented: need $bytesNeeded bytes but capacity is ${inputBuffer.capacity()} bytes"
+                                Log.e(TAG, errorMsg)
+                                throw RuntimeException(errorMsg)
+                            }
+
                             // Write PCM samples to buffer
                             for (i in 0 until samplesToWrite) {
                                 inputBuffer.putShort(audioData.samples[audioInputOffset + i])
@@ -1284,8 +1302,26 @@ class VideoEncoder(private val context: Context) {
                         val inputBuffer = audioEncoder.getInputBuffer(inputBufferId)!!
                         inputBuffer.clear()
 
-                        val samplesToWrite = min(audioInputBufferSize, audioData.samples.size - audioInputOffset)
+                        // Calculate max samples that can fit in buffer (each sample is 2 bytes for 16-bit PCM)
+                        val bufferCapacitySamples = inputBuffer.capacity() / 2
+                        val remainingSamples = audioData.samples.size - audioInputOffset
+                        val samplesToWrite = min(min(bufferCapacitySamples, audioInputBufferSize), remainingSamples)
+
+                        // Safety check and logging
+                        if (bufferCapacitySamples < audioInputBufferSize) {
+                            Log.w(TAG, "Audio input buffer capacity ($bufferCapacitySamples samples, ${inputBuffer.capacity()} bytes) " +
+                                    "is smaller than requested ($audioInputBufferSize samples). Using buffer capacity.")
+                        }
+
                         if (samplesToWrite > 0) {
+                            // Verify we won't overflow (defensive check)
+                            val bytesNeeded = samplesToWrite * 2
+                            if (bytesNeeded > inputBuffer.capacity()) {
+                                val errorMsg = "Audio buffer overflow prevented: need $bytesNeeded bytes but capacity is ${inputBuffer.capacity()} bytes"
+                                Log.e(TAG, errorMsg)
+                                throw RuntimeException(errorMsg)
+                            }
+
                             for (i in 0 until samplesToWrite) {
                                 inputBuffer.putShort(audioData.samples[audioInputOffset + i])
                             }
@@ -2066,8 +2102,26 @@ class VideoEncoder(private val context: Context) {
                         val inputBuffer = audioEncoder.getInputBuffer(inputBufferId)!!
                         inputBuffer.clear()
 
-                        val samplesToWrite = min(audioInputBufferSize, audioData.samples.size - audioInputOffset)
+                        // Calculate max samples that can fit in buffer (each sample is 2 bytes for 16-bit PCM)
+                        val bufferCapacitySamples = inputBuffer.capacity() / 2
+                        val remainingSamples = audioData.samples.size - audioInputOffset
+                        val samplesToWrite = min(min(bufferCapacitySamples, audioInputBufferSize), remainingSamples)
+
+                        // Safety check and logging
+                        if (bufferCapacitySamples < audioInputBufferSize) {
+                            Log.w(TAG, "Audio input buffer capacity ($bufferCapacitySamples samples, ${inputBuffer.capacity()} bytes) " +
+                                    "is smaller than requested ($audioInputBufferSize samples). Using buffer capacity.")
+                        }
+
                         if (samplesToWrite > 0) {
+                            // Verify we won't overflow (defensive check)
+                            val bytesNeeded = samplesToWrite * 2
+                            if (bytesNeeded > inputBuffer.capacity()) {
+                                val errorMsg = "Audio buffer overflow prevented: need $bytesNeeded bytes but capacity is ${inputBuffer.capacity()} bytes"
+                                Log.e(TAG, errorMsg)
+                                throw RuntimeException(errorMsg)
+                            }
+
                             for (i in 0 until samplesToWrite) {
                                 inputBuffer.putShort(audioData.samples[audioInputOffset + i])
                             }
