@@ -36,3 +36,7 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+  # Audio assets
+  assets:
+    - assets/audio/bgm/

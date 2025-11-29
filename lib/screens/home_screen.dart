@@ -184,10 +184,6 @@ class _HomeScreenState extends State<HomeScreen> {
     if (_selectedTemplate == null) return const SizedBox.shrink();
 
     final allowMusicSelection = _selectedTemplate!.config.allowMusicSelection;
-    final selectedTrack = MusicTrack.getAvailableBgmTracks().firstWhere(
-      (track) => track.fileName == _selectedMusicTrack,
-      orElse: () => MusicTrack.getAvailableBgmTracks().first,
-    );
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -201,29 +197,49 @@ class _HomeScreenState extends State<HomeScreen> {
 
         const SizedBox(height: AppConstants.paddingMedium),
 
-        // Music selection card
-        Card(
-          child: ListTile(
-            leading: Icon(
-              allowMusicSelection ? Icons.music_note : Icons.music_off,
-              color: allowMusicSelection
-                  ? Theme.of(context).colorScheme.primary
-                  : Theme.of(context).colorScheme.onSurface.withOpacity(0.4),
-            ),
-            title: Text(selectedTrack.displayName),
-            subtitle: Text(
-              allowMusicSelection
-                  ? '탭하여 변경'
-                  : '이 템플릿은 배경음악을 사용하지 않습니다',
-              style: TextStyle(
-                fontSize: 12,
-                color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
+        // Music selection card with FutureBuilder
+        FutureBuilder<List<MusicTrack>>(
+          future: MusicTrack.getAvailableBgmTracks(),
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Card(
+                child: ListTile(
+                  leading: CircularProgressIndicator(),
+                  title: Text('음악 목록 로딩 중...'),
+                ),
+              );
+            }
+
+            final tracks = snapshot.data ?? [];
+            final selectedTrack = tracks.firstWhere(
+              (track) => track.fileName == _selectedMusicTrack,
+              orElse: () => tracks.first,
+            );
+
+            return Card(
+              child: ListTile(
+                leading: Icon(
+                  allowMusicSelection ? Icons.music_note : Icons.music_off,
+                  color: allowMusicSelection
+                      ? Theme.of(context).colorScheme.primary
+                      : Theme.of(context).colorScheme.onSurface.withOpacity(0.4),
+                ),
+                title: Text(selectedTrack.displayName),
+                subtitle: Text(
+                  allowMusicSelection
+                      ? '탭하여 변경'
+                      : '이 템플릿은 배경음악을 사용하지 않습니다',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
+                  ),
+                ),
+                trailing: allowMusicSelection ? const Icon(Icons.chevron_right) : null,
+                enabled: allowMusicSelection,
+                onTap: allowMusicSelection ? _showMusicSelectionDialog : null,
               ),
-            ),
-            trailing: allowMusicSelection ? const Icon(Icons.chevron_right) : null,
-            enabled: allowMusicSelection,
-            onTap: allowMusicSelection ? _showMusicSelectionDialog : null,
-          ),
+            );
+          },
         ),
       ],
     );
@@ -318,7 +334,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _showMusicSelectionDialog() async {
-    final availableTracks = MusicTrack.getAvailableBgmTracks();
+    final availableTracks = await MusicTrack.getAvailableBgmTracks();
 
     await showDialog<String>(
       context: context,

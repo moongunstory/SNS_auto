@@ -6,6 +6,7 @@ import 'package:path/path.dart' as path;
 import '../models/render_job.dart';
 import '../config/constants.dart';
 import '../utils/result.dart';
+import '../models/template_model.dart';
 
 /// Service for rendering videos using Android native APIs (MediaCodec/MediaMuxer)
 ///
@@ -40,6 +41,24 @@ class VideoRenderer {
       print('[VideoRenderer] Output path: $outputPath');
       print('[VideoRenderer] Image count: ${job.imagePaths.length}');
 
+      // Get BGM file path (copy from assets if needed)
+      String bgmFilePath = '';
+      final musicTrackName = job.musicTrackName ?? job.template.config.musicTrackName ?? '';
+
+      if (musicTrackName.isNotEmpty) {
+        // Find the track object to get the asset path
+        final availableTracks = await MusicTrack.getAvailableBgmTracks();
+        final selectedTrack = availableTracks.firstWhere(
+          (track) => track.fileName == musicTrackName,
+          orElse: () => availableTracks.first,
+        );
+
+        if (!selectedTrack.isNoMusic) {
+          bgmFilePath = await _copyAssetToTempFile(selectedTrack.assetPath);
+          print('[VideoRenderer] BGM copied to: $bgmFilePath');
+        }
+      }
+
       // Prepare arguments for native encoder
       final arguments = {
         'imagePaths': job.imagePaths,
@@ -48,8 +67,8 @@ class VideoRenderer {
         // Template configuration (using simple defaults for base template)
         'imageDurationMs': (job.template.config.imageDurationSeconds * 1000).toInt(),
         'transitionDurationMs': (job.template.config.transitionDurationSeconds * 1000).toInt(),
-        // Use job's music selection if provided, otherwise fall back to template default
-        'musicTrackName': job.musicTrackName ?? job.template.config.musicTrackName ?? 'bgm_default.mp3',
+        // Pass absolute file path to BGM, or empty string for no music
+        'musicTrackName': bgmFilePath,
       };
 
       print('[VideoRenderer] Calling native encoder...');
@@ -145,5 +164,40 @@ class VideoRenderer {
         (numImages * imageDuration) - ((numImages - 1) * transitionDuration);
 
     return totalDuration;
+  }
+
+  /// Copy a Flutter asset to a temporary file
+  ///
+  /// This is needed because the Android encoder needs an actual file path,
+  /// but Flutter assets are embedded in the APK and need to be extracted first.
+  ///
+  /// [assetPath] - The asset path (e.g., "assets/audio/bgm/bgm_default.mp3")
+  ///
+  /// Returns the absolute path to the temporary file.
+  Future<String> _copyAssetToTempFile(String assetPath) async {
+    try {
+      // Load asset data
+      final ByteData data = await rootBundle.load(assetPath);
+      final List<int> bytes = data.buffer.asUint8List();
+
+      // Get temp directory
+      final tempDir = await getTemporaryDirectory();
+
+      // Extract filename from asset path
+      final fileName = path.basename(assetPath);
+
+      // Create temp file
+      final tempFile = File(path.join(tempDir.path, 'bgm_$fileName'));
+
+      // Write asset data to temp file
+      await tempFile.writeAsBytes(bytes);
+
+      print('[VideoRenderer] Asset copied: $assetPath -> ${tempFile.path}');
+
+      return tempFile.path;
+    } catch (e) {
+      print('[VideoRenderer] Error copying asset to temp file: $e');
+      rethrow;
+    }
   }
 }
