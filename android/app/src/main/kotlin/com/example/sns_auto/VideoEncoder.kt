@@ -81,6 +81,7 @@ class VideoEncoder(private val context: Context) {
         // Route to appropriate rendering method based on template
         return when (templateId) {
             "four_tile_intro" -> renderFourTileIntro(imagePaths, outputPath, musicTrackName)
+            "before_after" -> renderBeforeAfter(imagePaths, outputPath)
             else -> renderClassicSlideshow(imagePaths, outputPath, imageDurationMs, transitionDurationMs, musicTrackName)
         }
     }
@@ -1691,4 +1692,575 @@ class VideoEncoder(private val context: Context) {
         val srcXIndex: Int,
         val srcYIndex: Int
     )
+
+    // ============================================================================
+    // BEFORE & AFTER TEMPLATE
+    // ============================================================================
+
+    companion object BeforeAfterConstants {
+        // Tunable constants for Before & After template
+        const val BEFORE_HOLD_MS = 2500L       // 2.5 seconds
+        const val AFTER_HOLD_MS = 2500L        // 2.5 seconds
+        const val TEXT_FLIP_MS = 200L          // 0.2 seconds
+        const val AFTER_ZOOM_SCALE = 1.05f     // 5% zoom-in
+
+        // Text styling
+        const val TEXT_SIZE_PX = 120f
+        const val TEXT_STROKE_WIDTH = 8f
+    }
+
+    /**
+     * Render Before & After template
+     *
+     * This template shows exactly 2 images:
+     * - Image 0: "Before" (interior before remodeling)
+     * - Image 1: "After" (interior after remodeling)
+     *
+     * Audio timeline:
+     * - before.mp3 plays from t=0
+     * - bell-ring.mp3 plays at t=BEFORE_HOLD_MS
+     * - after.mp3 plays immediately after bell-ring.mp3
+     *
+     * Visual timeline:
+     * - 0.0 ~ BEFORE_HOLD_MS: Show Before image + "Before" text (static)
+     * - BEFORE_HOLD_MS (instant cut): Show After image + "After" text with flip animation
+     * - BEFORE_HOLD_MS ~ end: After image with subtle zoom-in
+     *
+     * @param imagePaths List of exactly 2 image paths [before, after]
+     * @param outputPath Output video path
+     */
+    private fun renderBeforeAfter(
+        imagePaths: List<String>,
+        outputPath: String
+    ): String {
+        Log.d(TAG, "Rendering Before & After template")
+
+        // Validate exactly 2 images
+        if (imagePaths.size != 2) {
+            throw IllegalArgumentException("Before & After template requires exactly 2 images, got ${imagePaths.size}")
+        }
+
+        // Calculate video parameters
+        val bellTimeMs = BEFORE_HOLD_MS
+        val totalDurationMs = BEFORE_HOLD_MS + AFTER_HOLD_MS
+        val totalFrames = ((totalDurationMs * VIDEO_FPS) / 1000).toInt()
+        val videoDurationUs = totalDurationMs * 1000L
+
+        val beforeEndFrame = ((BEFORE_HOLD_MS * VIDEO_FPS) / 1000).toInt()
+        val textFlipFrames = ((TEXT_FLIP_MS * VIDEO_FPS) / 1000).toInt()
+
+        Log.d(TAG, "Before & After video: $totalFrames frames (${totalDurationMs / 1000.0}s)")
+        Log.d(TAG, "Timeline: Before=0-$beforeEndFrame, After=$beforeEndFrame-$totalFrames, TextFlip=${textFlipFrames}f")
+
+        // Audio setup - use AudioMixer to combine before.mp3, bell-ring.mp3, after.mp3
+        val beforeMp3Path = getAudioFilePath("before.mp3")
+        val bellRingMp3Path = getAudioFilePath("bell-ring.mp3")
+        val afterMp3Path = getAudioFilePath("after.mp3")
+
+        // Validate audio files
+        if (beforeMp3Path == null || !File(beforeMp3Path).exists()) {
+            throw IllegalStateException("before.mp3 not found in res/raw or external storage")
+        }
+        if (bellRingMp3Path == null || !File(bellRingMp3Path).exists()) {
+            throw IllegalStateException("bell-ring.mp3 not found in res/raw or external storage")
+        }
+        if (afterMp3Path == null || !File(afterMp3Path).exists()) {
+            throw IllegalStateException("after.mp3 not found in res/raw or external storage")
+        }
+
+        Log.d(TAG, "Audio files found:")
+        Log.d(TAG, "  before.mp3: $beforeMp3Path")
+        Log.d(TAG, "  bell-ring.mp3: $bellRingMp3Path")
+        Log.d(TAG, "  after.mp3: $afterMp3Path")
+
+        // Load and prepare images
+        val bitmaps = loadAndPrepareImages(imagePaths)
+
+        try {
+            // Setup MediaMuxer
+            val muxer = MediaMuxer(outputPath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+
+            // Encode with Before & After specific logic
+            val trackIndices = encodeBeforeAfterVideo(
+                muxer = muxer,
+                beforeBitmap = bitmaps[0],
+                afterBitmap = bitmaps[1],
+                totalFrames = totalFrames,
+                beforeEndFrame = beforeEndFrame,
+                textFlipFrames = textFlipFrames,
+                videoDurationUs = videoDurationUs,
+                beforeMp3Path = beforeMp3Path,
+                bellRingMp3Path = bellRingMp3Path,
+                afterMp3Path = afterMp3Path,
+                bellTimeMs = bellTimeMs
+            )
+
+            // Finalize muxer
+            if (trackIndices.muxerStarted) {
+                muxer.stop()
+            }
+            muxer.release()
+
+            Log.d(TAG, "Before & After video encoding complete: $outputPath")
+
+            // Cleanup
+            bitmaps.forEach { it.recycle() }
+
+            return outputPath
+        } catch (e: Exception) {
+            // Cleanup on error
+            bitmaps.forEach { it.recycle() }
+            File(outputPath).delete()
+            throw e
+        }
+    }
+
+    /**
+     * Get audio file path from external storage (or copy from res/raw if needed)
+     * Similar to getBgmFilePath but for any audio file
+     */
+    private fun getAudioFilePath(audioFileName: String): String? {
+        return try {
+            val externalFilesDir = context.getExternalFilesDir(null)
+            if (externalFilesDir != null) {
+                val bgmDir = File(externalFilesDir, "bgm")
+                if (!bgmDir.exists()) {
+                    bgmDir.mkdirs()
+                }
+
+                val audioFile = File(bgmDir, audioFileName)
+
+                // If audio doesn't exist in external storage, try to copy from res/raw
+                if (!audioFile.exists()) {
+                    Log.d(TAG, "Audio not found in external storage, checking res/raw...")
+                    copyBgmFromResources(audioFile, audioFileName)
+                }
+
+                audioFile.absolutePath
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting audio file path: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Encode Before & After video with audio mixing
+     */
+    private fun encodeBeforeAfterVideo(
+        muxer: MediaMuxer,
+        beforeBitmap: Bitmap,
+        afterBitmap: Bitmap,
+        totalFrames: Int,
+        beforeEndFrame: Int,
+        textFlipFrames: Int,
+        videoDurationUs: Long,
+        beforeMp3Path: String,
+        bellRingMp3Path: String,
+        afterMp3Path: String,
+        bellTimeMs: Long
+    ): TrackIndices {
+        Log.d(TAG, "Encoding Before & After video...")
+
+        // Configure video format
+        val videoFormat = MediaFormat.createVideoFormat(VIDEO_MIME_TYPE, VIDEO_WIDTH, VIDEO_HEIGHT).apply {
+            setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+            setInteger(MediaFormat.KEY_BIT_RATE, VIDEO_BITRATE)
+            setInteger(MediaFormat.KEY_FRAME_RATE, VIDEO_FPS)
+            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, VIDEO_I_FRAME_INTERVAL)
+        }
+
+        // Create and configure video encoder
+        val videoEncoder = MediaCodec.createEncoderByType(VIDEO_MIME_TYPE)
+        videoEncoder.configure(videoFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+        val inputSurface = videoEncoder.createInputSurface()
+        videoEncoder.start()
+
+        var videoTrackIndex = -1
+        var audioTrackIndex = -1
+        var muxerStarted = false
+
+        // Mix audio offline: before.mp3 as base, bell-ring.mp3 and after.mp3 as overlays
+        val audioData = try {
+            Log.d(TAG, "Mixing Before & After audio timeline...")
+            val mixer = AudioMixer(context)
+
+            // Create a custom mixed audio by manually combining the three tracks
+            val mixed = mixBeforeAfterAudio(
+                mixer,
+                beforeMp3Path,
+                bellRingMp3Path,
+                afterMp3Path,
+                bellTimeMs,
+                videoDurationUs
+            )
+            AudioData(mixed.samples, mixed.sampleRate, mixed.channelCount)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to mix audio: ${e.message}", e)
+            null
+        }
+
+        // Create audio encoder if we have samples
+        val audioEncoder = if (audioData != null && audioData.samples.isNotEmpty()) {
+            Log.d(TAG, "Creating audio encoder")
+            val audioFormat = MediaFormat.createAudioFormat(
+                AUDIO_MIME_TYPE,
+                audioData.sampleRate,
+                audioData.channelCount
+            ).apply {
+                setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
+                setInteger(MediaFormat.KEY_BIT_RATE, AUDIO_BITRATE)
+                setInteger(MediaFormat.KEY_PCM_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
+            }
+            MediaCodec.createEncoderByType(AUDIO_MIME_TYPE).apply {
+                configure(audioFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                start()
+            }
+        } else {
+            Log.d(TAG, "No audio encoder (no audio)")
+            null
+        }
+
+        // Setup EGL for rendering
+        val eglHelper = EglHelper()
+        eglHelper.setup(inputSurface)
+
+        try {
+            var frameIndex = 0
+            var videoInputDone = false
+            var audioInputDone = audioEncoder == null
+            var audioInputOffset = 0
+            val audioInputBufferSize = 2048
+
+            // Main encoding loop
+            while (!videoInputDone || !audioInputDone ||
+                videoTrackIndex < 0 || (audioEncoder != null && audioTrackIndex < 0)) {
+
+                // Feed video frames
+                if (!videoInputDone && frameIndex < totalFrames) {
+                    // Generate frame with text overlay
+                    val frameBitmap = generateBeforeAfterFrame(
+                        beforeBitmap = beforeBitmap,
+                        afterBitmap = afterBitmap,
+                        frameIndex = frameIndex,
+                        beforeEndFrame = beforeEndFrame,
+                        textFlipFrames = textFlipFrames,
+                        totalFrames = totalFrames
+                    )
+
+                    // Calculate presentation time
+                    val presentationTimeNs = (frameIndex * 1_000_000_000L) / VIDEO_FPS
+
+                    // Render to surface
+                    eglHelper.drawFrame(frameBitmap, presentationTimeNs)
+                    frameBitmap.recycle()
+
+                    frameIndex++
+
+                    if (frameIndex >= totalFrames) {
+                        videoEncoder.signalEndOfInputStream()
+                        videoInputDone = true
+                        Log.d(TAG, "All video frames submitted ($frameIndex frames)")
+                    }
+
+                    if (frameIndex % 30 == 0) {
+                        Log.d(TAG, "Submitted video frame $frameIndex/$totalFrames")
+                    }
+                }
+
+                // Feed audio samples
+                if (audioEncoder != null && audioData != null && !audioInputDone) {
+                    val inputBufferId = audioEncoder.dequeueInputBuffer(CODEC_TIMEOUT_US)
+                    if (inputBufferId >= 0) {
+                        val inputBuffer = audioEncoder.getInputBuffer(inputBufferId)!!
+                        inputBuffer.clear()
+
+                        val samplesToWrite = min(audioInputBufferSize, audioData.samples.size - audioInputOffset)
+                        if (samplesToWrite > 0) {
+                            for (i in 0 until samplesToWrite) {
+                                inputBuffer.putShort(audioData.samples[audioInputOffset + i])
+                            }
+                            inputBuffer.flip()
+
+                            val presentationTimeUs = (audioInputOffset * 1_000_000L) / (audioData.sampleRate * audioData.channelCount)
+                            audioEncoder.queueInputBuffer(inputBufferId, 0, samplesToWrite * 2, presentationTimeUs, 0)
+
+                            audioInputOffset += samplesToWrite
+                        } else {
+                            audioEncoder.queueInputBuffer(inputBufferId, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                            audioInputDone = true
+                            Log.d(TAG, "All audio samples submitted")
+                        }
+                    }
+                }
+
+                // Process video encoder output
+                val videoBufferInfo = MediaCodec.BufferInfo()
+                var videoOutputIndex = videoEncoder.dequeueOutputBuffer(videoBufferInfo, CODEC_TIMEOUT_US)
+
+                when (videoOutputIndex) {
+                    MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                        if (videoTrackIndex >= 0) {
+                            throw RuntimeException("Video format changed twice")
+                        }
+                        val outputFormat = videoEncoder.outputFormat
+                        videoTrackIndex = muxer.addTrack(outputFormat)
+                        Log.d(TAG, "Video track added (index: $videoTrackIndex)")
+
+                        if ((audioEncoder == null || audioTrackIndex >= 0) && !muxerStarted) {
+                            muxer.start()
+                            muxerStarted = true
+                            Log.d(TAG, "Muxer started")
+                        }
+                    }
+                    MediaCodec.INFO_TRY_AGAIN_LATER -> {
+                        // No output available yet
+                    }
+                    else -> {
+                        if (videoOutputIndex >= 0) {
+                            val encodedData = videoEncoder.getOutputBuffer(videoOutputIndex)
+                                ?: throw RuntimeException("Video encoder output buffer was null")
+
+                            if (videoBufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
+                                videoBufferInfo.size = 0
+                            }
+
+                            if (videoBufferInfo.size != 0 && muxerStarted) {
+                                encodedData.position(videoBufferInfo.offset)
+                                encodedData.limit(videoBufferInfo.offset + videoBufferInfo.size)
+                                muxer.writeSampleData(videoTrackIndex, encodedData, videoBufferInfo)
+                            }
+
+                            videoEncoder.releaseOutputBuffer(videoOutputIndex, false)
+
+                            if (videoBufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+                                Log.d(TAG, "Video encoding complete")
+                                if (audioEncoder == null) {
+                                    break
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Process audio encoder output
+                if (audioEncoder != null) {
+                    val audioBufferInfo = MediaCodec.BufferInfo()
+                    var audioOutputIndex = audioEncoder.dequeueOutputBuffer(audioBufferInfo, CODEC_TIMEOUT_US)
+
+                    when (audioOutputIndex) {
+                        MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                            if (audioTrackIndex >= 0) {
+                                throw RuntimeException("Audio format changed twice")
+                            }
+                            val outputFormat = audioEncoder.outputFormat
+                            audioTrackIndex = muxer.addTrack(outputFormat)
+                            Log.d(TAG, "Audio track added (index: $audioTrackIndex)")
+
+                            if (videoTrackIndex >= 0 && !muxerStarted) {
+                                muxer.start()
+                                muxerStarted = true
+                                Log.d(TAG, "Muxer started")
+                            }
+                        }
+                        MediaCodec.INFO_TRY_AGAIN_LATER -> {
+                            // No output available yet
+                        }
+                        else -> {
+                            if (audioOutputIndex >= 0) {
+                                val encodedData = audioEncoder.getOutputBuffer(audioOutputIndex)
+                                    ?: throw RuntimeException("Audio encoder output buffer was null")
+
+                                if (audioBufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
+                                    audioBufferInfo.size = 0
+                                }
+
+                                if (audioBufferInfo.size != 0 && muxerStarted) {
+                                    encodedData.position(audioBufferInfo.offset)
+                                    encodedData.limit(audioBufferInfo.offset + audioBufferInfo.size)
+                                    muxer.writeSampleData(audioTrackIndex, encodedData, audioBufferInfo)
+                                }
+
+                                audioEncoder.releaseOutputBuffer(audioOutputIndex, false)
+
+                                if (audioBufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+                                    Log.d(TAG, "Audio encoding complete")
+                                    if (videoInputDone && (videoBufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0)) {
+                                        break
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Log.d(TAG, "Before & After encoding finished successfully")
+            return TrackIndices(videoTrackIndex, audioTrackIndex, muxerStarted)
+        } finally {
+            eglHelper.release()
+            videoEncoder.stop()
+            videoEncoder.release()
+            inputSurface.release()
+            audioEncoder?.stop()
+            audioEncoder?.release()
+        }
+    }
+
+    /**
+     * Mix audio for Before & After template
+     * Combines before.mp3, bell-ring.mp3, and after.mp3 into a single timeline
+     */
+    private fun mixBeforeAfterAudio(
+        mixer: AudioMixer,
+        beforeMp3Path: String,
+        bellRingMp3Path: String,
+        afterMp3Path: String,
+        bellTimeMs: Long,
+        videoDurationUs: Long
+    ): AudioMixer.MixedAudio {
+        // Extract before.mp3 as base (full duration)
+        val beforeData = extractAudioSamplesFromFile(beforeMp3Path, videoDurationUs)
+
+        // Create output buffer (copy of before.mp3, extended to video duration if needed)
+        val targetSampleCount = ((videoDurationUs / 1_000_000.0) * beforeData.sampleRate * beforeData.channelCount).toInt()
+        val mixedSamples = ShortArray(targetSampleCount)
+
+        // Copy before.mp3 samples to the beginning
+        val beforeCopyCount = min(beforeData.samples.size, mixedSamples.size)
+        System.arraycopy(beforeData.samples, 0, mixedSamples, 0, beforeCopyCount)
+
+        // Schedule bell-ring.mp3 at bellTimeMs
+        val bellEvents = listOf(AudioMixer.SfxEvent("bell-ring", bellTimeMs))
+
+        // Load bell-ring SFX from file and mix it
+        try {
+            val bellData = extractAudioSamplesFromFile(bellRingMp3Path, Long.MAX_VALUE)
+            val bellStartSample = ((bellTimeMs / 1000.0) * beforeData.sampleRate * beforeData.channelCount).toInt()
+            mixSfxIntoBuffer(mixedSamples, bellData.samples, bellStartSample)
+            Log.d(TAG, "Mixed bell-ring.mp3 at ${bellTimeMs}ms")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to mix bell-ring.mp3: ${e.message}", e)
+        }
+
+        // Schedule after.mp3 immediately after bell (with small delay ~100ms)
+        val afterStartMs = bellTimeMs + 100
+        try {
+            val afterData = extractAudioSamplesFromFile(afterMp3Path, Long.MAX_VALUE)
+            val afterStartSample = ((afterStartMs / 1000.0) * beforeData.sampleRate * beforeData.channelCount).toInt()
+            mixSfxIntoBuffer(mixedSamples, afterData.samples, afterStartSample)
+            Log.d(TAG, "Mixed after.mp3 at ${afterStartMs}ms")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to mix after.mp3: ${e.message}", e)
+        }
+
+        return AudioMixer.MixedAudio(mixedSamples, beforeData.sampleRate, beforeData.channelCount)
+    }
+
+    /**
+     * Mix SFX samples into the main buffer at specified position
+     * Clamps values to prevent clipping
+     */
+    private fun mixSfxIntoBuffer(mainBuffer: ShortArray, sfxSamples: ShortArray, startSample: Int) {
+        val endSample = min(startSample + sfxSamples.size, mainBuffer.size)
+        val sfxLength = endSample - startSample
+
+        for (i in 0 until sfxLength) {
+            if (startSample + i < mainBuffer.size && i < sfxSamples.size) {
+                // Mix by adding and clamping to Short range
+                val mixed = mainBuffer[startSample + i].toInt() + sfxSamples[i].toInt()
+                mainBuffer[startSample + i] = mixed.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+            }
+        }
+    }
+
+    /**
+     * Generate a single frame for Before & After template
+     *
+     * Timeline:
+     * - Frames 0 ~ beforeEndFrame: Show Before image with "Before" text
+     * - Frame beforeEndFrame (instant cut): Switch to After image
+     * - Frames beforeEndFrame ~ beforeEndFrame+textFlipFrames: Text flip animation "Before" → "After"
+     * - Frames beforeEndFrame ~ totalFrames: After image with zoom + "After" text
+     */
+    private fun generateBeforeAfterFrame(
+        beforeBitmap: Bitmap,
+        afterBitmap: Bitmap,
+        frameIndex: Int,
+        beforeEndFrame: Int,
+        textFlipFrames: Int,
+        totalFrames: Int
+    ): Bitmap {
+        val isBeforePhase = frameIndex < beforeEndFrame
+        val isTextFlipPhase = frameIndex >= beforeEndFrame && frameIndex < (beforeEndFrame + textFlipFrames)
+        val afterPhaseFrame = frameIndex - beforeEndFrame
+
+        // Create output bitmap
+        val output = Bitmap.createBitmap(VIDEO_WIDTH, VIDEO_HEIGHT, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(output)
+        canvas.drawColor(Color.BLACK)
+
+        if (isBeforePhase) {
+            // Show Before image (static, no zoom)
+            canvas.drawBitmap(beforeBitmap, 0f, 0f, null)
+
+            // Draw "Before" text at top-center
+            drawText(canvas, "BEFORE", 1.0f)
+        } else {
+            // Show After image with zoom
+            val afterFrameCount = totalFrames - beforeEndFrame
+            val zoomProgress = afterPhaseFrame.toFloat() / afterFrameCount.toFloat()
+            val currentScale = 1.0f + (AFTER_ZOOM_SCALE - 1.0f) * zoomProgress
+
+            // Apply zoom
+            canvas.save()
+            canvas.scale(currentScale, currentScale, VIDEO_WIDTH / 2f, VIDEO_HEIGHT / 2f)
+            canvas.drawBitmap(afterBitmap, 0f, 0f, null)
+            canvas.restore()
+
+            // Draw "After" text with flip animation
+            if (isTextFlipPhase) {
+                val flipProgress = afterPhaseFrame.toFloat() / textFlipFrames.toFloat()
+                drawText(canvas, "AFTER", flipProgress)
+            } else {
+                drawText(canvas, "AFTER", 1.0f)
+            }
+        }
+
+        return output
+    }
+
+    /**
+     * Draw text overlay at top-center
+     *
+     * @param canvas Canvas to draw on
+     * @param text Text to draw ("BEFORE" or "AFTER")
+     * @param alpha Alpha for fade-in effect (0.0 = invisible, 1.0 = fully visible)
+     */
+    private fun drawText(canvas: Canvas, text: String, alpha: Float) {
+        val paint = Paint().apply {
+            color = Color.WHITE
+            textSize = TEXT_SIZE_PX
+            typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
+            textAlign = Paint.Align.CENTER
+            isAntiAlias = true
+            this.alpha = (alpha * 255).toInt().coerceIn(0, 255)
+        }
+
+        // Draw text with stroke for readability
+        val strokePaint = Paint(paint).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = TEXT_STROKE_WIDTH
+            color = Color.BLACK
+        }
+
+        val x = VIDEO_WIDTH / 2f
+        val y = 200f // Top position with some padding
+
+        // Draw stroke first, then fill
+        canvas.drawText(text, x, y, strokePaint)
+        canvas.drawText(text, x, y, paint)
+    }
 }
