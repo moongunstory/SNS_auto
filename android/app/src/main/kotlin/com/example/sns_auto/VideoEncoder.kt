@@ -1718,8 +1718,8 @@ class VideoEncoder(private val context: Context) {
      *
      * Audio timeline:
      * - before.mp3 plays from t=0
-     * - bell-ring.mp3 plays at t=BEFORE_HOLD_MS
-     * - after.mp3 plays immediately after bell-ring.mp3
+     * - bell_ring.mp3 plays at t=BEFORE_HOLD_MS
+     * - after.mp3 plays immediately after bell_ring.mp3
      *
      * Visual timeline:
      * - 0.0 ~ BEFORE_HOLD_MS: Show Before image + "Before" text (static)
@@ -1752,9 +1752,9 @@ class VideoEncoder(private val context: Context) {
         Log.d(TAG, "Before & After video: $totalFrames frames (${totalDurationMs / 1000.0}s)")
         Log.d(TAG, "Timeline: Before=0-$beforeEndFrame, After=$beforeEndFrame-$totalFrames, TextFlip=${textFlipFrames}f")
 
-        // Audio setup - use AudioMixer to combine before.mp3, bell-ring.mp3, after.mp3
+        // Audio setup - use AudioMixer to combine before.mp3, bell_ring.mp3, after.mp3
         val beforeMp3Path = getAudioFilePath("before.mp3")
-        val bellRingMp3Path = getAudioFilePath("bell-ring.mp3")
+        val bellRingMp3Path = getAudioFilePath("bell_ring.mp3")
         val afterMp3Path = getAudioFilePath("after.mp3")
 
         // Validate audio files
@@ -1762,7 +1762,7 @@ class VideoEncoder(private val context: Context) {
             throw IllegalStateException("before.mp3 not found in res/raw or external storage")
         }
         if (bellRingMp3Path == null || !File(bellRingMp3Path).exists()) {
-            throw IllegalStateException("bell-ring.mp3 not found in res/raw or external storage")
+            throw IllegalStateException("bell_ring.mp3 not found in res/raw or external storage")
         }
         if (afterMp3Path == null || !File(afterMp3Path).exists()) {
             throw IllegalStateException("after.mp3 not found in res/raw or external storage")
@@ -1770,7 +1770,7 @@ class VideoEncoder(private val context: Context) {
 
         Log.d(TAG, "Audio files found:")
         Log.d(TAG, "  before.mp3: $beforeMp3Path")
-        Log.d(TAG, "  bell-ring.mp3: $bellRingMp3Path")
+        Log.d(TAG, "  bell_ring.mp3: $bellRingMp3Path")
         Log.d(TAG, "  after.mp3: $afterMp3Path")
 
         // Load and prepare images
@@ -1882,7 +1882,7 @@ class VideoEncoder(private val context: Context) {
         var audioTrackIndex = -1
         var muxerStarted = false
 
-        // Mix audio offline: before.mp3 as base, bell-ring.mp3 and after.mp3 as overlays
+        // Mix audio offline: before.mp3 as base, bell_ring.mp3 and after.mp3 as overlays
         val audioData = try {
             Log.d(TAG, "Mixing Before & After audio timeline...")
             val mixer = AudioMixer(context)
@@ -2111,7 +2111,7 @@ class VideoEncoder(private val context: Context) {
 
     /**
      * Mix audio for Before & After template
-     * Combines before.mp3, bell-ring.mp3, and after.mp3 into a single timeline
+     * Combines before.mp3, bell_ring.mp3, and after.mp3 into a single timeline
      */
     private fun mixBeforeAfterAudio(
         mixer: AudioMixer,
@@ -2132,17 +2132,17 @@ class VideoEncoder(private val context: Context) {
         val beforeCopyCount = min(beforeData.samples.size, mixedSamples.size)
         System.arraycopy(beforeData.samples, 0, mixedSamples, 0, beforeCopyCount)
 
-        // Schedule bell-ring.mp3 at bellTimeMs
-        val bellEvents = listOf(AudioMixer.SfxEvent("bell-ring", bellTimeMs))
+        // Schedule bell_ring.mp3 at bellTimeMs
+        val bellEvents = listOf(AudioMixer.SfxEvent("bell_ring", bellTimeMs))
 
-        // Load bell-ring SFX from file and mix it
+        // Load bell_ring SFX from file and mix it
         try {
             val bellData = extractAudioSamplesFromFile(bellRingMp3Path, Long.MAX_VALUE)
             val bellStartSample = ((bellTimeMs / 1000.0) * beforeData.sampleRate * beforeData.channelCount).toInt()
             mixSfxIntoBuffer(mixedSamples, bellData.samples, bellStartSample)
-            Log.d(TAG, "Mixed bell-ring.mp3 at ${bellTimeMs}ms")
+            Log.d(TAG, "Mixed bell_ring.mp3 at ${bellTimeMs}ms")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to mix bell-ring.mp3: ${e.message}", e)
+            Log.e(TAG, "Failed to mix bell_ring.mp3: ${e.message}", e)
         }
 
         // Schedule after.mp3 immediately after bell (with small delay ~100ms)
