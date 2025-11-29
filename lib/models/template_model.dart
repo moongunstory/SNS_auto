@@ -52,6 +52,7 @@ class TemplateModel {
           musicTrackName: '', // No BGM for this template
           minImages: 2,
           maxImages: 2,
+          allowMusicSelection: false,  // Music locked to "No music" for this template
         ),
       ),
     ];
@@ -68,6 +69,7 @@ class TemplateConfig {
   final String? textOverlayContent;
   final int? minImages;
   final int? maxImages;
+  final bool allowMusicSelection;  // Whether user can change BGM for this template
 
   const TemplateConfig({
     required this.transitionType,
@@ -78,6 +80,7 @@ class TemplateConfig {
     this.textOverlayContent,
     this.minImages,
     this.maxImages,
+    this.allowMusicSelection = true,  // Default: allow music selection
   });
 
   /// Get the allowed image count range as a string
@@ -107,4 +110,33 @@ class TemplateConfig {
 enum TransitionType {
   fade,  // Used by classic slideshow
   cut,   // Used by four-tile and before/after
+}
+
+/// Represents a music track option
+class MusicTrack {
+  final String fileName;
+  final String displayName;
+  final bool isNoMusic;
+
+  const MusicTrack({
+    required this.fileName,
+    required this.displayName,
+    this.isNoMusic = false,
+  });
+
+  /// Get available BGM tracks (excludes SFX files)
+  static List<MusicTrack> getAvailableBgmTracks() {
+    return [
+      const MusicTrack(
+        fileName: '',
+        displayName: '음악 없음',
+        isNoMusic: true,
+      ),
+      const MusicTrack(
+        fileName: 'bgm_default.mp3',
+        displayName: '기본 배경음악',
+      ),
+      // Add more BGM tracks here as needed
+    ];
+  }
 }
