@@ -17,7 +17,7 @@ class TemplateModel {
     return [
       TemplateModel(
         id: 'classic_slideshow',
-        name: '기본 슬라이드쇼 (클래식)',
+        name: '기본 (클래식)',
         description: '부드러운 크로스페이드 전환 효과',
         config: TemplateConfig(
           transitionType: TransitionType.fade,
