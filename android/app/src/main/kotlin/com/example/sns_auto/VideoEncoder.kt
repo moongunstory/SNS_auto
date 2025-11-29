@@ -249,6 +249,38 @@ class VideoEncoder(private val context: Context) {
     )
 
     /**
+     * Video segment definition for timeline-based rendering
+     */
+    private data class VideoSegment(
+        val imageIndex: Int,
+        val startMs: Long,
+        val endMs: Long
+    ) {
+        val durationMs: Long get() = endMs - startMs
+
+        fun validate(totalDurationMs: Long): Boolean {
+            return startMs >= 0 &&
+                   endMs > startMs &&
+                   endMs <= totalDurationMs &&
+                   durationMs > 0
+        }
+    }
+
+    /**
+     * Audio event definition for timeline-based audio mixing
+     */
+    private data class AudioEvent(
+        val assetName: String,
+        val filePath: String,
+        val startMs: Long,
+        val maxDurationMs: Long = Long.MAX_VALUE
+    ) {
+        fun validate(totalDurationMs: Long): Boolean {
+            return startMs >= 0 && startMs < totalDurationMs
+        }
+    }
+
+    /**
      * Calculate total number of frames for the video
      *
      * With crossfade:
@@ -1731,7 +1763,9 @@ class VideoEncoder(private val context: Context) {
         imagePaths: List<String>,
         outputPath: String
     ): String {
+        Log.d(TAG, "=".repeat(80))
         Log.d(TAG, "Rendering Before & After template")
+        Log.d(TAG, "=".repeat(80))
 
         // Validate exactly 2 images
         if (imagePaths.size != 2) {
@@ -1739,18 +1773,40 @@ class VideoEncoder(private val context: Context) {
         }
 
         // Calculate video parameters
-        val bellTimeMs = BEFORE_HOLD_MS
         val totalDurationMs = BEFORE_HOLD_MS + AFTER_HOLD_MS
         val totalFrames = ((totalDurationMs * VIDEO_FPS) / 1000).toInt()
         val videoDurationUs = totalDurationMs * 1000L
 
-        val beforeEndFrame = ((BEFORE_HOLD_MS * VIDEO_FPS) / 1000).toInt()
-        val textFlipFrames = ((TEXT_FLIP_MS * VIDEO_FPS) / 1000).toInt()
+        Log.d(TAG, "Video duration: ${totalDurationMs}ms ($totalFrames frames @ ${VIDEO_FPS}fps)")
 
-        Log.d(TAG, "Before & After video: $totalFrames frames (${totalDurationMs / 1000.0}s)")
-        Log.d(TAG, "Timeline: Before=0-$beforeEndFrame, After=$beforeEndFrame-$totalFrames, TextFlip=${textFlipFrames}f")
+        // ============================================================================
+        // 1. VIDEO SEGMENT TIMELINE
+        // ============================================================================
+        val segments = listOf(
+            VideoSegment(
+                imageIndex = 0,
+                startMs = 0,
+                endMs = BEFORE_HOLD_MS
+            ),
+            VideoSegment(
+                imageIndex = 1,
+                startMs = BEFORE_HOLD_MS,
+                endMs = BEFORE_HOLD_MS + AFTER_HOLD_MS
+            )
+        )
 
-        // Audio setup - use AudioMixer to combine before.mp3, bell_ring.mp3, after.mp3
+        // Validate segments
+        Log.d(TAG, "\n--- VIDEO SEGMENT TIMELINE ---")
+        segments.forEachIndexed { index, segment ->
+            if (!segment.validate(totalDurationMs)) {
+                throw IllegalStateException("Invalid segment $index: startMs=${segment.startMs}, endMs=${segment.endMs}, totalDurationMs=$totalDurationMs")
+            }
+            Log.d(TAG, "Segment $index: image=${segment.imageIndex}, startMs=${segment.startMs}, endMs=${segment.endMs}, durationMs=${segment.durationMs}")
+        }
+
+        // ============================================================================
+        // 2. AUDIO TIMELINE
+        // ============================================================================
         val beforeMp3Path = getAudioFilePath("before.mp3")
         val bellRingMp3Path = getAudioFilePath("bell_ring.mp3")
         val afterMp3Path = getAudioFilePath("after.mp3")
@@ -1766,10 +1822,46 @@ class VideoEncoder(private val context: Context) {
             throw IllegalStateException("after.mp3 not found in res/raw or external storage")
         }
 
-        Log.d(TAG, "Audio files found:")
-        Log.d(TAG, "  before.mp3: $beforeMp3Path")
-        Log.d(TAG, "  bell_ring.mp3: $bellRingMp3Path")
-        Log.d(TAG, "  after.mp3: $afterMp3Path")
+        val audioEvents = listOf(
+            AudioEvent(
+                assetName = "before.mp3",
+                filePath = beforeMp3Path,
+                startMs = 0,
+                maxDurationMs = BEFORE_HOLD_MS
+            ),
+            AudioEvent(
+                assetName = "bell_ring.mp3",
+                filePath = bellRingMp3Path,
+                startMs = BEFORE_HOLD_MS,
+                maxDurationMs = Long.MAX_VALUE
+            ),
+            AudioEvent(
+                assetName = "after.mp3",
+                filePath = afterMp3Path,
+                startMs = BEFORE_HOLD_MS,
+                maxDurationMs = AFTER_HOLD_MS
+            )
+        )
+
+        // Validate audio events
+        Log.d(TAG, "\n--- AUDIO TIMELINE ---")
+        audioEvents.forEach { event ->
+            if (!event.validate(totalDurationMs)) {
+                throw IllegalStateException("Invalid audio event ${event.assetName}: startMs=${event.startMs}, totalDurationMs=$totalDurationMs")
+            }
+            val clampedDuration = minOf(event.maxDurationMs, totalDurationMs - event.startMs)
+            Log.d(TAG, "Audio: ${event.assetName}, startMs=${event.startMs}, maxDurationMs=${clampedDuration}")
+        }
+
+        // ============================================================================
+        // 3. TEXT OVERLAY TIMELINE
+        // ============================================================================
+        val textFlipFrames = ((TEXT_FLIP_MS * VIDEO_FPS) / 1000).toInt()
+        Log.d(TAG, "\n--- TEXT OVERLAY TIMELINE ---")
+        Log.d(TAG, "Before text: startMs=0, endMs=$BEFORE_HOLD_MS")
+        Log.d(TAG, "After text: startMs=$BEFORE_HOLD_MS, endMs=$totalDurationMs")
+        Log.d(TAG, "Text flip animation: ${textFlipFrames} frames ($TEXT_FLIP_MS ms)")
+        Log.d(TAG, "=".repeat(80))
 
         // Load and prepare images
         val bitmaps = loadAndPrepareImages(imagePaths)
@@ -1781,21 +1873,24 @@ class VideoEncoder(private val context: Context) {
             // Encode with Before & After specific logic
             val trackIndices = encodeBeforeAfterVideo(
                 muxer = muxer,
-                beforeBitmap = bitmaps[0],
-                afterBitmap = bitmaps[1],
+                bitmaps = bitmaps,
+                segments = segments,
                 totalFrames = totalFrames,
-                beforeEndFrame = beforeEndFrame,
                 textFlipFrames = textFlipFrames,
                 videoDurationUs = videoDurationUs,
-                beforeMp3Path = beforeMp3Path,
-                bellRingMp3Path = bellRingMp3Path,
-                afterMp3Path = afterMp3Path,
-                bellTimeMs = bellTimeMs
+                audioEvents = audioEvents,
+                totalDurationMs = totalDurationMs
             )
 
             // Finalize muxer
             if (trackIndices.muxerStarted) {
-                muxer.stop()
+                try {
+                    muxer.stop()
+                    Log.d(TAG, "Muxer stopped successfully")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error stopping muxer: ${e.message}", e)
+                    throw e
+                }
             }
             muxer.release()
 
@@ -1806,10 +1901,14 @@ class VideoEncoder(private val context: Context) {
 
             return outputPath
         } catch (e: Exception) {
+            Log.e(TAG, "=".repeat(80))
+            Log.e(TAG, "ENCODING ERROR: ${e.message}", e)
+            Log.e(TAG, "Stack trace:", e)
+            Log.e(TAG, "=".repeat(80))
             // Cleanup on error
             bitmaps.forEach { it.recycle() }
             File(outputPath).delete()
-            throw e
+            throw RuntimeException("Video encoding failed: ${e.message}", e)
         }
     }
 
@@ -1845,22 +1944,19 @@ class VideoEncoder(private val context: Context) {
     }
 
     /**
-     * Encode Before & After video with audio mixing
+     * Encode Before & After video with audio mixing using segment-based timeline
      */
     private fun encodeBeforeAfterVideo(
         muxer: MediaMuxer,
-        beforeBitmap: Bitmap,
-        afterBitmap: Bitmap,
+        bitmaps: List<Bitmap>,
+        segments: List<VideoSegment>,
         totalFrames: Int,
-        beforeEndFrame: Int,
         textFlipFrames: Int,
         videoDurationUs: Long,
-        beforeMp3Path: String,
-        bellRingMp3Path: String,
-        afterMp3Path: String,
-        bellTimeMs: Long
+        audioEvents: List<AudioEvent>,
+        totalDurationMs: Long
     ): TrackIndices {
-        Log.d(TAG, "Encoding Before & After video...")
+        Log.d(TAG, "Encoding Before & After video with ${totalFrames} frames...")
 
         // Configure video format
         val videoFormat = MediaFormat.createVideoFormat(VIDEO_MIME_TYPE, VIDEO_WIDTH, VIDEO_HEIGHT).apply {
@@ -1880,23 +1976,17 @@ class VideoEncoder(private val context: Context) {
         var audioTrackIndex = -1
         var muxerStarted = false
 
-        // Mix audio offline: before.mp3 as base, bell_ring.mp3 and after.mp3 as overlays
+        // Mix audio offline using the audio events timeline
         val audioData = try {
             Log.d(TAG, "Mixing Before & After audio timeline...")
-            val mixer = AudioMixer(context)
-
-            // Create a custom mixed audio by manually combining the three tracks
-            val mixed = mixBeforeAfterAudio(
-                mixer,
-                beforeMp3Path,
-                bellRingMp3Path,
-                afterMp3Path,
-                bellTimeMs,
-                videoDurationUs
+            mixBeforeAfterAudioFromEvents(
+                audioEvents = audioEvents,
+                totalDurationMs = totalDurationMs,
+                videoDurationUs = videoDurationUs
             )
-            AudioData(mixed.samples, mixed.sampleRate, mixed.channelCount)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to mix audio: ${e.message}", e)
+            e.printStackTrace()
             null
         }
 
@@ -1938,18 +2028,19 @@ class VideoEncoder(private val context: Context) {
 
                 // Feed video frames
                 if (!videoInputDone && frameIndex < totalFrames) {
-                    // Generate frame with text overlay
-                    val frameBitmap = generateBeforeAfterFrame(
-                        beforeBitmap = beforeBitmap,
-                        afterBitmap = afterBitmap,
+                    // Generate frame using segment-based approach
+                    val frameBitmap = generateBeforeAfterFrameFromSegments(
+                        bitmaps = bitmaps,
+                        segments = segments,
                         frameIndex = frameIndex,
-                        beforeEndFrame = beforeEndFrame,
+                        totalFrames = totalFrames,
                         textFlipFrames = textFlipFrames,
-                        totalFrames = totalFrames
+                        totalDurationMs = totalDurationMs
                     )
 
-                    // Calculate presentation time
-                    val presentationTimeNs = (frameIndex * 1_000_000_000L) / VIDEO_FPS
+                    // Calculate presentation time using consistent formula
+                    // This ensures strictly increasing timestamps
+                    val presentationTimeNs = toPresentationTimeNs(frameIndex.toLong())
 
                     // Render to surface
                     eglHelper.drawFrame(frameBitmap, presentationTimeNs)
@@ -2108,8 +2199,75 @@ class VideoEncoder(private val context: Context) {
     }
 
     /**
+     * Convert frame index to presentation timestamp in nanoseconds
+     * Ensures strictly increasing timestamps
+     */
+    private fun toPresentationTimeNs(frameIndex: Long): Long {
+        return (frameIndex * 1_000_000_000L) / VIDEO_FPS
+    }
+
+    /**
+     * Mix audio for Before & After template using audio events timeline
+     */
+    private fun mixBeforeAfterAudioFromEvents(
+        audioEvents: List<AudioEvent>,
+        totalDurationMs: Long,
+        videoDurationUs: Long
+    ): AudioData? {
+        if (audioEvents.isEmpty()) {
+            Log.w(TAG, "No audio events to mix")
+            return null
+        }
+
+        // Extract the first audio file to get the sample rate and channel count
+        val firstEvent = audioEvents[0]
+        val baseAudioData = extractAudioSamplesFromFile(firstEvent.filePath, videoDurationUs)
+
+        // Create output buffer sized for the full video duration
+        val targetSampleCount = ((videoDurationUs / 1_000_000.0) * baseAudioData.sampleRate * baseAudioData.channelCount).toInt()
+        val mixedSamples = ShortArray(targetSampleCount)
+
+        Log.d(TAG, "Audio mixing: targetSampleCount=$targetSampleCount, sampleRate=${baseAudioData.sampleRate}, channels=${baseAudioData.channelCount}")
+
+        // Mix each audio event into the output buffer
+        audioEvents.forEach { event ->
+            try {
+                val audioData = extractAudioSamplesFromFile(event.filePath, videoDurationUs)
+
+                // Calculate start sample position
+                val startSample = ((event.startMs / 1000.0) * audioData.sampleRate * audioData.channelCount).toInt()
+
+                // Calculate max samples to mix (clamped by maxDurationMs and remaining buffer)
+                val maxDurationSamples = if (event.maxDurationMs == Long.MAX_VALUE) {
+                    audioData.samples.size
+                } else {
+                    ((event.maxDurationMs / 1000.0) * audioData.sampleRate * audioData.channelCount).toInt()
+                }
+
+                val availableSamples = minOf(
+                    audioData.samples.size,
+                    maxDurationSamples,
+                    mixedSamples.size - startSample
+                ).coerceAtLeast(0)
+
+                if (availableSamples > 0 && startSample < mixedSamples.size) {
+                    mixSfxIntoBuffer(mixedSamples, audioData.samples, startSample, availableSamples)
+                    Log.d(TAG, "Mixed ${event.assetName}: startMs=${event.startMs}, startSample=$startSample, samples=$availableSamples")
+                } else {
+                    Log.w(TAG, "Skipped ${event.assetName}: startSample=$startSample >= bufferSize=${mixedSamples.size}")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to mix ${event.assetName}: ${e.message}", e)
+            }
+        }
+
+        return AudioData(mixedSamples, baseAudioData.sampleRate, baseAudioData.channelCount)
+    }
+
+    /**
      * Mix audio for Before & After template
      * Combines before.mp3, bell_ring.mp3, and after.mp3 into a single timeline
+     * @deprecated Use mixBeforeAfterAudioFromEvents instead
      */
     private fun mixBeforeAfterAudio(
         mixer: AudioMixer,
@@ -2161,9 +2319,14 @@ class VideoEncoder(private val context: Context) {
      * Mix SFX samples into the main buffer at specified position
      * Clamps values to prevent clipping
      */
-    private fun mixSfxIntoBuffer(mainBuffer: ShortArray, sfxSamples: ShortArray, startSample: Int) {
-        val endSample = min(startSample + sfxSamples.size, mainBuffer.size)
-        val sfxLength = endSample - startSample
+    private fun mixSfxIntoBuffer(
+        mainBuffer: ShortArray,
+        sfxSamples: ShortArray,
+        startSample: Int,
+        maxSamples: Int = Int.MAX_VALUE
+    ) {
+        val endSample = minOf(startSample + sfxSamples.size, mainBuffer.size, startSample + maxSamples)
+        val sfxLength = (endSample - startSample).coerceAtLeast(0)
 
         for (i in 0 until sfxLength) {
             if (startSample + i < mainBuffer.size && i < sfxSamples.size) {
@@ -2175,6 +2338,80 @@ class VideoEncoder(private val context: Context) {
     }
 
     /**
+     * Generate a single frame for Before & After template using segment-based timeline
+     *
+     * This function uses the segment timeline to determine which image to show
+     * and applies text overlays based on the current segment.
+     */
+    private fun generateBeforeAfterFrameFromSegments(
+        bitmaps: List<Bitmap>,
+        segments: List<VideoSegment>,
+        frameIndex: Int,
+        totalFrames: Int,
+        textFlipFrames: Int,
+        totalDurationMs: Long
+    ): Bitmap {
+        // Calculate current time in milliseconds
+        val currentTimeMs = (frameIndex * 1000L * totalDurationMs) / (totalFrames * 1000L)
+
+        // Find which segment we're in
+        var currentSegment: VideoSegment? = null
+        for (segment in segments) {
+            if (currentTimeMs >= segment.startMs && currentTimeMs < segment.endMs) {
+                currentSegment = segment
+                break
+            }
+        }
+
+        // If we're past the last segment, use the last segment
+        if (currentSegment == null && segments.isNotEmpty()) {
+            currentSegment = segments.last()
+        }
+
+        if (currentSegment == null) {
+            throw IllegalStateException("No segment found for frame $frameIndex at time ${currentTimeMs}ms")
+        }
+
+        // Create output bitmap
+        val output = Bitmap.createBitmap(VIDEO_WIDTH, VIDEO_HEIGHT, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(output)
+        canvas.drawColor(Color.BLACK)
+
+        // Get the image for this segment
+        val segmentBitmap = bitmaps[currentSegment.imageIndex]
+
+        // Check if we're in the "After" segment (segment 1)
+        val isAfterSegment = currentSegment.imageIndex == 1
+
+        if (isAfterSegment) {
+            // Apply zoom animation for After segment
+            val segmentProgress = (currentTimeMs - currentSegment.startMs).toFloat() / currentSegment.durationMs.toFloat()
+            val currentScale = 1.0f + (AFTER_ZOOM_SCALE - 1.0f) * segmentProgress
+
+            canvas.save()
+            canvas.scale(currentScale, currentScale, VIDEO_WIDTH / 2f, VIDEO_HEIGHT / 2f)
+            canvas.drawBitmap(segmentBitmap, 0f, 0f, null)
+            canvas.restore()
+
+            // Draw "After" text with flip animation at the start of segment
+            val framesIntoSegment = frameIndex - ((currentSegment.startMs * VIDEO_FPS) / 1000).toInt()
+            if (framesIntoSegment < textFlipFrames) {
+                val flipProgress = framesIntoSegment.toFloat() / textFlipFrames.toFloat()
+                drawText(canvas, "AFTER", flipProgress)
+            } else {
+                drawText(canvas, "AFTER", 1.0f)
+            }
+        } else {
+            // Before segment - static image, no zoom
+            canvas.drawBitmap(segmentBitmap, 0f, 0f, null)
+            // Draw "Before" text
+            drawText(canvas, "BEFORE", 1.0f)
+        }
+
+        return output
+    }
+
+    /**
      * Generate a single frame for Before & After template
      *
      * Timeline:
@@ -2182,6 +2419,8 @@ class VideoEncoder(private val context: Context) {
      * - Frame beforeEndFrame (instant cut): Switch to After image
      * - Frames beforeEndFrame ~ beforeEndFrame+textFlipFrames: Text flip animation "Before" → "After"
      * - Frames beforeEndFrame ~ totalFrames: After image with zoom + "After" text
+     *
+     * @deprecated Use generateBeforeAfterFrameFromSegments instead
      */
     private fun generateBeforeAfterFrame(
         beforeBitmap: Bitmap,
